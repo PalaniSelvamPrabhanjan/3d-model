@@ -1,0 +1,12 @@
+{
+  "site": "F17",
+  "title": "F17 Production Digital Twin",
+  "staleAfterSeconds": 30,
+  "dataSource": {
+    "type": "none",
+    "websocketUrl": "wss://your-gateway.example/f17/state",
+    "restUrl": "/api/f17/state",
+    "pollSeconds": 5
+  },
+  "demoMode": false
+}
