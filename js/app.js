@@ -12,6 +12,10 @@ const [layout, config] = await Promise.all([
 const U = 0.035, CX = 700, CY = 640;          // 1 plan unit = 35 mm
 const mx = (X) => (X - CX) * U, mz = (Y) => (Y - CY) * U;
 const stage = document.getElementById('stage');
+// ?gpulog=1 runs the graphics diagnostics (js/gpulog.js) before the twin asks for its own 3D context
+const GPULOG = new URLSearchParams(location.search).has('gpulog');
+const gpulog = GPULOG ? await import('./gpulog.js') : null;
+if (gpulog) await gpulog.runGpuProbe();
 let renderer;
 try { renderer = new THREE.WebGLRenderer({ antialias: true }); }
 catch (err) {
@@ -570,6 +574,8 @@ if (new URLSearchParams(location.search).has('stats')) {
     requestAnimationFrame(tick);
   })(t0);
 }
+
+if (gpulog) gpulog.watchRenderer(renderer);
 
 startFeed(!!config.demoMode);
 renderList();
