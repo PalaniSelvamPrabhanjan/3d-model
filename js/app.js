@@ -543,6 +543,34 @@ renderer.setAnimationLoop((now) => {
   ctl.update(); renderer.render(scene, cam);
 });
 
+// ---------- diagnostics: add ?stats=1 to the address to show a performance readout ----------
+if (new URLSearchParams(location.search).has('stats')) {
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:16px;bottom:12px;z-index:9;background:rgba(8,22,44,.94);border:1px solid #5fb4ff;border-radius:6px;padding:10px 12px;font:12px/1.5 ui-monospace,Consolas,monospace;color:#e6f0fb;white-space:pre;pointer-events:none';
+  document.body.appendChild(box);
+  const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+  const gpu = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  let frames = 0, t0 = performance.now(), fps = 0, worst = 0, prev = t0;
+  renderer.info.autoReset = true;
+  (function tick(now) {
+    frames++; worst = Math.max(worst, now - prev); prev = now;
+    if (now - t0 >= 1000) {
+      fps = frames * 1000 / (now - t0); frames = 0; t0 = now;
+      const c = renderer.domElement, pr = renderer.getPixelRatio();
+      box.textContent = [
+        `FPS            ${fps.toFixed(0)}   (slowest frame ${worst.toFixed(0)} ms)`,
+        `Graphics chip  ${gpu.replace(/^ANGLE \(|\)$/g, '')}`,
+        `Screen         ${screen.width} x ${screen.height} at ${Math.round(devicePixelRatio * 100)}% scaling`,
+        `Drawing        ${c.width} x ${c.height} px = ${(c.width * c.height / 1e6).toFixed(1)} million px (x${pr})`,
+        `Per frame      ${renderer.info.render.calls} draw calls, ${(renderer.info.render.triangles / 1000).toFixed(0)}k triangles`,
+        `Tour           ${ctl.autoRotate ? 'on' : 'off'}    Walls ${walls.visible ? 'on' : 'off'}`,
+      ].join('\n');
+      worst = 0;
+    }
+    requestAnimationFrame(tick);
+  })(t0);
+}
+
 startFeed(!!config.demoMode);
 renderList();
 if (location.hash.length > 1) select(decodeURIComponent(location.hash.slice(1)), true);
