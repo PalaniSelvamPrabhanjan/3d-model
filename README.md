@@ -1,6 +1,6 @@
-# F17 Production Twin
+# Grid Production Twin
 
-A browser-based 3D digital twin of the F17 Level 1 production and store rooms, built for the control-room wall screen. It shows every room and machine at true scale and colours each machine by its live state once a data feed is connected.
+A browser-based 3D digital twin of the Grid production and store rooms (Level 1), built for the control-room wall screen. It shows every room at true scale and every machine in its true position (drawn slightly smaller so the aisles read clearly), and colours each machine by its live state once a data feed is connected.
 
 **Areas covered:**
 - SMT clean room (3 lines)
@@ -11,7 +11,7 @@ A browser-based 3D digital twin of the F17 Level 1 production and store rooms, b
 - Selective Wave Soldering
 - Conformal Coating / Degreaser
 - IQC and the Changing Room
-- Command Center
+- Core X
 - Smart Warehouse, corridors and lobbies (for context)
 
 ## Contents
@@ -45,12 +45,12 @@ A browser-based 3D digital twin of the F17 Level 1 production and store rooms, b
 
 **Scale:** 1 plan unit = 35 mm. All 3D sizes are in metres.
 
-**Current model:** 34 room pieces, 23 doors, 114 assets.
+**Current model:** 34 room pieces, 23 doors, 111 assets.
 
 | Room | Assets |
 |---|---|
 | Clean Room (SMT) | 37 |
-| Hybrid Room | 26 |
+| Hybrid Room | 23 |
 | Laser Room | 19 |
 | HASS | 14 |
 | Test Lab | 5 |
@@ -98,19 +98,20 @@ No database or back end is needed. The only file you'll change routinely is `dat
    ```
 3. Open **VIEW** and pick a camera, or **Tour (slow orbit)** for an unattended display.
 4. To show one machine on start-up, add its ID to the URL: `http://server/f17-twin/#L2-PNP1`.
+5. To start with the Smart Warehouse hidden or shown regardless of the saved choice, add `?warehouse=0` or `?warehouse=1` to the address.
 
-A mid-range office PC with integrated graphics is enough. The scene draws about 3,000 parts with soft shadows.
+A mid-range office PC with integrated graphics is enough. The scene is about 1,400 parts and 37,000 triangles (about 1,500 draw calls, plus the shadow pass), with soft shadows. The page uses about 17 MB of JavaScript memory.
 
 ---
 
 ## Using the twin
 
 ### Top bar
-- **Status pill:** shows **No live data**, **Connecting**, **Live**, **Reconnecting** or **Demo data**.
+- **Status pill:** shows **No live data**, **Connecting**, **Live**, **Reconnecting** or **Demo data** (only if demo mode is switched on in `data/config.json`).
 - **Clock**
 - **VIEW** dropdown:
   - Camera: **3D overview**, **Top view**, **SMT lines**, **Hybrid Room**
-  - Display: **Walls**, **Tour (slow orbit)**, **Demo data**, **Full screen**
+  - Display: **Walls**, **Warehouse** (show or hide the Smart Warehouse; remembered in that browser), **Tour (slow orbit)**, **Full screen**
 - **EDIT LAYOUT** (see [Editing the layout](#editing-the-layout))
 
 ### Equipment panel (left)
@@ -193,7 +194,8 @@ Set `dataSource.type` in `data/config.json`:
     "restUrl": "/api/f17/state",
     "pollSeconds": 5
   },
-  "demoMode": false
+  "demoMode": false,
+  "machineScale": 0.765
 }
 ```
 
@@ -233,7 +235,7 @@ The usual set-ups are:
 Keep the gateway on the plant network. The browser only ever reads.
 
 ### Demo data
-**VIEW → Demo data** fills the model with random states for training and screen tests. It is off by default, and the status pill says **Demo data** while it's on. Benches, cabinets, racks and conveyors never get a state.
+Setting `"demoMode": true` in `data/config.json` fills the model with random states for training and screen tests. There is no button for it on screen. It is off by default, and the status pill says **Demo data** while it's on. Benches, cabinets, racks and conveyors never get a state.
 
 ---
 
@@ -278,10 +280,12 @@ f17-twin/
 ├── css/style.css         control-room theme and layout
 ├── js/app.js             scene, rooms, walls, doors, UI, selection, views, editing
 ├── js/models.js          3D machine models, one per machine family
+js/engine.js          picks the 3D engine from the address and reports what it draws with
 ├── js/feed.js            live-data adapter (WebSocket / REST / demo)
 ├── data/layout.json      rooms, room outlines, doors and all assets
 ├── data/config.json      data source and stale timeout
-└── vendor/three/         three.js r160 + OrbitControls (MIT licence)
+└── vendor/three/         three.js r160 + OrbitControls (MIT licence), the normal engine
+vendor/three-r187/    three.js r187 WebGPU build + OrbitControls (MIT licence), the ?engine=webgpu test engine
 ```
 
 ---
@@ -364,6 +368,8 @@ One polygon per grouped room: `{ "points": [[x,y], …], "restricted": true }`.
 | Mycronic MYC50 coater | White base, glass cell |
 | Others | Plasma cleaner, laser ball attach, engraver, chiller, shock tester, N2 cabinets, racks, benches |
 
+**Drawn size:** machines are drawn at 76.5 % of their footprint from the drawings (85 %, then a further 0.9) so the aisles read clearly (`"machineScale"` in `data/config.json`, 0.5–1; use 1 for exact size). SMT line machines shrink only across the line, so they still meet their conveyors. Benches, cabinets and racks stay full size. The detail card still shows the real footprint.
+
 **Which way each model faces:**
 - SMT line machines face west, toward the aisle between lines.
 - Benches are worked from one of their long sides.
@@ -392,6 +398,31 @@ These settings stop surfaces flickering while the camera moves. Keep them in min
 If you add parts in `models.js`, avoid placing two surfaces in exactly the same plane. Offset decorations by at least 5 mm.
 
 ---
+
+## 3D engine (normal and WebGPU test)
+
+The twin can run on two versions of three.js, the 3D library in `vendor/`. The address chooses which one:
+
+| Address | Engine | Route to the graphics chip |
+|---|---|---|
+| normal (no option) | three.js **r160** (`vendor/three/`) | WebGL |
+| `?engine=webgpu` | three.js **r187** (`vendor/three-r187/`) | **WebGPU**, or WebGL 2 by itself if the browser has no usable WebGPU |
+| `?engine=webgpu-webgl` | three.js r187 | WebGL 2 only (to compare the two r187 routes) |
+
+WebGPU is a newer route to the graphics chip. On some laptops whose driver refuses WebGL (and so draws with SwiftShader, on the processor), WebGPU still reaches the chip. Combine it with the readout to see what each screen gets: `?engine=webgpu&stats=1` (the **Engine** line shows the version and route) or `?engine=webgpu&gpulog=1`.
+
+The normal address stays on r160 until the WebGPU engine has been checked on every screen. If the WebGPU engine loses the graphics device, a red notice offers the normal engine. The choice is made in `index.html` (which build it loads) and `js/engine.js` (which renderer it creates).
+
+## Graphics diagnostics
+
+Add these to the address (they can be combined: `?stats=1&gpulog=1`):
+
+| Option | Shows |
+|---|---|
+| `?stats=1` | Live box, bottom left: FPS, slowest frame, graphics chip in use, screen scaling, pixels drawn, draw calls |
+| `?gpulog=1` | Before the twin starts, requests a 3D context six ways (WebGL2/WebGL1, with and without "graphics chip only") and records whether each got the **graphics chip**, **software** (SwiftShader/WARP) or **failed**, with the browser's reason. Then watches for driver resets (context lost), long freezes, scaling changes and frame rate every 10 s. Printed in F12 → Console (filter `[GPU]`), summarised on screen, and downloadable with **DOWNLOAD GPU LOG**. Code: `js/gpulog.js` (loaded only with this option). |
+
+If the twin reports **SwiftShader**, **WARP** or **Microsoft Basic Render Driver**, it is being drawn by the processor, not the graphics chip: expect a low frame rate and flicker. Compare the graphics driver version in `edge://gpu` with a laptop that works, and check `edge://policy` for `EnableUnsafeSwiftShader`.
 
 ## Troubleshooting
 

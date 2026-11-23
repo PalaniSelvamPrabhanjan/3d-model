@@ -1,4 +1,4 @@
-// Procedural 3D models of the F17 equipment, shaped and coloured after manufacturer photos.
+// Procedural 3D models of the Grid production equipment, shaped and coloured after manufacturer photos.
 // Every model is built in its own frame: width W along x, depth D along z, the operator front facing +z, floor at y = 0.
 // build() returns the machine height and where its signal tower stands (null = no tower).
 import * as THREE from 'three';

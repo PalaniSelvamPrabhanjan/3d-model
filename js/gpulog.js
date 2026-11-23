@@ -1,14 +1,15 @@
-// GPU diagnostics for the F17 twin. Open the page with ?gpulog=1 to run it.
+// GPU diagnostics for the Grid production twin. Open the page with ?gpulog=1 to run it.
 // 1. Before the twin starts, it asks the browser for a 3D context in several ways and records,
 //    for each request, whether it got the graphics chip, software rendering, or nothing (and why).
 // 2. It then watches the twin's own 3D context: driver resets (context lost/restored), slow frames,
 //    screen/scaling changes and tab visibility.
-// Everything is printed in the developer panel (F12 → Console, filter "[GPU]"), kept in window.f17GpuLog,
+// Everything is printed in the developer panel (F12 → Console, filter "[GPU]"), kept in window.gridGpuLog,
 // and summarised on screen with a button to download the full log as a file.
 
 const T0 = performance.now();
 const log = { started: new Date().toISOString(), environment: {}, probes: [], twin: {}, events: [], verdict: '' };
-window.f17GpuLog = log;
+window.gridGpuLog = log;
+import { describe, frameStats, onLoss } from './engine.js';
 const SOFT = /SwiftShader|WARP|Basic Render|llvmpipe|softpipe|Software/i;
 const stamp = () => `${((performance.now() - T0) / 1000).toFixed(1)}s`;
 const tag = ['%c[GPU]', 'color:#5fb4ff;font-weight:bold'];
@@ -50,6 +51,7 @@ function verdict() {
   const p = Object.fromEntries(log.probes.map((r) => [r.test, r]));
   const hw2 = p['WebGL2, chip only']?.result === 'GRAPHICS CHIP', hw1 = p['WebGL1, chip only']?.result === 'GRAPHICS CHIP';
   const twinSoft = log.twin.result === 'SOFTWARE';
+  if (!twinSoft && log.twin.route === 'WebGPU') return `OK: the twin is drawn on the graphics chip through WebGPU (${log.twin.engine}).` + (hw2 ? '' : ' WebGL alone would NOT have reached the chip on this device, so WebGPU is what fixes it here.');
   if (hw2 && !twinSoft) return 'OK: the twin is drawn on the graphics chip.';
   if (hw2 && twinSoft) return 'The chip accepts WebGL2 in a test, but the twin itself ended up in software. Likely a driver reset during start-up; see the events list.';
   if (!hw2 && hw1) return 'The graphics chip REFUSES WebGL2 (what the twin needs) but ACCEPTS WebGL1. Driver/browser problem with WebGL2: a WebGL1 fallback in the twin or a driver change will fix it.';
@@ -81,7 +83,7 @@ export async function runGpuProbe() {
   ];
   for (const [name, type, attrs] of tests) log.probes.push(probe(name, type, attrs));
 
-  console.group(...tag, 'F17 twin graphics log');
+  console.group(...tag, 'Grid production twin graphics log');
   console.log('Environment', log.environment);
   console.table(log.probes.map(({ test, result, ms, renderer, reason }) => ({ test, result, 'time (ms)': ms, renderer: renderer || '', reason })));
   console.groupEnd();
@@ -89,15 +91,15 @@ export async function runGpuProbe() {
 }
 
 export function watchRenderer(renderer) {
-  const gl = renderer.getContext(), c = renderer.domElement;
-  const { vendor, renderer: name } = rendererOf(gl);
-  log.twin = { result: SOFT.test(name) ? 'SOFTWARE' : 'GRAPHICS CHIP', renderer: name, vendor, version: gl.getParameter(gl.VERSION), attributes: gl.getContextAttributes(), pixelRatio: renderer.getPixelRatio() };
+  const d = describe(renderer);
+  log.twin = { result: d.software ? 'SOFTWARE' : 'GRAPHICS CHIP', engine: d.engine, route: d.route, renderer: d.chip, vendor: d.vendor, version: d.version || '', pixelRatio: renderer.getPixelRatio() };
   log.verdict = verdict();
   console.log(...tag, 'Twin 3D context', log.twin);
   console.log(...tag, 'VERDICT:', log.verdict);
 
-  c.addEventListener('webglcontextlost', () => event('CONTEXT LOST (graphics driver reset or browser took the chip away)', {}, 'error'));
-  c.addEventListener('webglcontextrestored', () => event('context restored', { renderer: rendererOf(renderer.getContext()).renderer }, 'warn'));
+  onLoss(renderer,
+    (why) => event('GRAPHICS DEVICE LOST (driver reset or browser took the chip away)', { why }, 'error'),
+    () => event('graphics device restored', {}, 'warn'));
   document.addEventListener('visibilitychange', () => event('tab ' + document.visibilityState, {}));
   let mq; const dpr = () => { mq = matchMedia(`(resolution: ${devicePixelRatio}dppx)`); mq.addEventListener('change', () => { event('screen scaling changed (moved screen, casting or zoom)', { devicePixelRatio, screen: `${screen.width} x ${screen.height}` }, 'warn'); dpr(); }, { once: true }); }; dpr();
 
@@ -107,7 +109,7 @@ export function watchRenderer(renderer) {
     const dt = now - last; last = now; n++; worst = Math.max(worst, dt); if (dt > 50) slow++;
     if (dt > 250 && document.visibilityState === 'visible') event('long freeze', { ms: Math.round(dt) }, 'warn');
     if (now - t0 >= 10000) {
-      const r = { fps: +(n * 1000 / (now - t0)).toFixed(1), slowestFrameMs: Math.round(worst), framesOver50ms: slow, drawCalls: renderer.info.render.calls };
+      const r = { fps: +(n * 1000 / (now - t0)).toFixed(1), slowestFrameMs: Math.round(worst), framesOver50ms: slow, drawCalls: frameStats(renderer).calls };
       log.events.push({ t: stamp(), time: new Date().toISOString(), kind: 'frames (last 10 s)', ...r });
       console.log(...tag, `${stamp()} frames (last 10 s)`, r); n = 0; worst = 0; slow = 0; t0 = now; panel?.update(r);
     }
@@ -127,7 +129,7 @@ function makePanel() {
   btn.onclick = () => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(log, null, 2)], { type: 'application/json' }));
-    a.download = `f17-gpu-log-${new Date().toISOString().replace(/[:.]/g, '-')}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    a.download = `grid-gpu-log-${new Date().toISOString().replace(/[:.]/g, '-')}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
   const close = document.createElement('button'); close.textContent = 'HIDE';
   close.style.cssText = btn.style.cssText + ';margin-left:8px;color:#e6f0fb;border-color:#5fb4ff;background:transparent';
@@ -139,7 +141,7 @@ function makePanel() {
       if (frames) lastFrames = frames;
       const lines = ['GPU LOG  (full detail: F12 → Console, filter [GPU])', ''];
       log.probes.forEach((r) => lines.push(`${r.result.padEnd(13)} ${r.test}${r.reason ? `\n              reason: ${r.reason}` : ''}`));
-      if (log.twin.renderer) lines.push('', `TWIN USES     ${log.twin.result}`, `              ${log.twin.renderer}`, '', `VERDICT  ${log.verdict}`);
+      if (log.twin.renderer) lines.push('', `TWIN USES     ${log.twin.result} via ${log.twin.route} (${log.twin.engine})`, `              ${log.twin.renderer}`, '', `VERDICT  ${log.verdict}`);
       if (lastFrames) lines.push('', `LAST 10 s     ${lastFrames.fps} fps · slowest ${lastFrames.slowestFrameMs} ms · ${lastFrames.framesOver50ms} stutters`);
       const ev = log.events.filter((e) => !e.kind.startsWith('frames'));
       if (ev.length) lines.push('', 'EVENTS', ...ev.slice(-6).map((e) => `  ${e.t}  ${e.kind}${e.ms ? ` (${e.ms} ms)` : ''}`));

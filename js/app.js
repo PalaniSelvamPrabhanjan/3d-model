@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/orbit';
 import { STATES, createFeed } from './feed.js';
 import { build, kindOf } from './models.js';
+import { ENGINE, createRenderer, describe, frameStats, onLoss } from './engine.js';
 
 const [layout, config] = await Promise.all([
   fetch('data/layout.json').then((r) => r.json()),
@@ -17,15 +18,21 @@ const GPULOG = new URLSearchParams(location.search).has('gpulog');
 const gpulog = GPULOG ? await import('./gpulog.js') : null;
 if (gpulog) await gpulog.runGpuProbe();
 let renderer;
-try { renderer = new THREE.WebGLRenderer({ antialias: true }); }
+try { renderer = await createRenderer(); }   // engine chosen by the address: see js/engine.js
 catch (err) {
-  document.getElementById('stage').innerHTML = '<p class="nojs">This screen cannot show 3D (WebGL is off or unsupported). Use a recent Chrome or Edge with hardware acceleration enabled.</p>';
+  document.getElementById('stage').innerHTML = `<p class="nojs">This screen cannot show 3D (${ENGINE === 'webgl' ? 'WebGL' : 'WebGPU and WebGL 2'} unavailable). Use a recent Chrome or Edge with hardware acceleration enabled.</p>`;
   throw err;
 }
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = renderer.isWebGPURenderer ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;   // r187's WebGPU renderer has no PCFSoft
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 stage.appendChild(renderer.domElement);
+// if the graphics device is lost while on the WebGPU test engine, say so and offer the normal engine instead of leaving a blank screen
+if (ENGINE !== 'webgl') onLoss(renderer, (why) => {
+  const n = document.createElement('div'); n.className = 'engine-note';
+  n.innerHTML = `<b>The WebGPU engine stopped on this screen</b><span>${String(why).replace(/[<>&]/g, '')}</span><a href="${location.pathname}">Open with the normal engine</a>`;
+  document.body.appendChild(n);
+});
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x061021); scene.fog = new THREE.Fog(0x061021, 70, 150);
 const cam = new THREE.PerspectiveCamera(40, 1, 0.5, 400);   // near plane 0.5 m: 5x finer depth precision than 0.1, so touching surfaces don't fight
 const ctl = new OrbitControls(cam, renderer.domElement);
@@ -65,6 +72,12 @@ function add(geo, mat, x, y, z, parent) {
 
 // ---------- rooms & walls ----------
 const walls = new THREE.Group(); scene.add(walls);
+// Smart Warehouse: its floors, walls, doors and any machines go in their own groups so VIEW → Warehouse can hide it
+const WH_ROOMS = layout.rooms.filter((r) => r.group === 'WH');
+const WH_NAMES = new Set(WH_ROOMS.map((r) => r.name));
+const inWH = (x, y) => WH_ROOMS.some((r) => x >= r.x - 1.5 && x <= r.x + r.w + 1.5 && y >= r.y - 1.5 && y <= r.y + r.h + 1.5);
+const whGroup = new THREE.Group(); scene.add(whGroup);
+const whWalls = new THREE.Group(); whWalls.renderOrder = 10; walls.add(whWalls);   // red (restricted) warehouse walls
 const edge = new THREE.LineBasicMaterial({ color: 0x7cc4ff }), edgeRed = new THREE.LineBasicMaterial({ color: 0xff5a5a });
 const WH = 2.6;
 // walls are collected first, then shared walls of neighbouring rooms are merged so no two transparent panels overlap (they shimmer as the camera moves)
@@ -90,13 +103,13 @@ function buildWalls() {
 function drawWall(x1, y1, x2, y2, red) {
   const a = new THREE.Vector3(mx(x1), 0, mz(y1)), b = new THREE.Vector3(mx(x2), 0, mz(y2)); const len = a.distanceTo(b); if (len < 0.01) return;
   const m = new THREE.Mesh(new THREE.BoxGeometry(len, WH, 0.08), M.wall);
-  m.position.set((a.x + b.x) / 2, WH / 2, (a.z + b.z) / 2); m.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x); walls.add(m);
-  walls.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, WH, a.z), new THREE.Vector3(b.x, WH, b.z)]), red ? edgeRed : edge));
+  m.position.set((a.x + b.x) / 2, WH / 2, (a.z + b.z) / 2); m.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x); (red ? whWalls : walls).add(m);
+  (red ? whWalls : walls).add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, WH, a.z), new THREE.Vector3(b.x, WH, b.z)]), red ? edgeRed : edge));
 }
 const inside = (r) => layout.rooms.some((o) => o !== r && o.w * o.h > r.w * r.h && r.x >= o.x - 0.5 && r.y >= o.y - 0.5 && r.x + r.w <= o.x + o.w + 0.5 && r.y + r.h <= o.y + o.h + 0.5);
 for (const r of layout.rooms) {
   const f = add(new THREE.BoxGeometry(r.w * U - 0.04, 0.04, r.h * U - 0.04),
-    new THREE.MeshStandardMaterial({ color: r.context ? 0x0d203b : r.hatch ? 0x1b3d66 : 0x16365e, roughness: 0.9 }), mx(r.x + r.w / 2), inside(r) ? 0.03 : 0.02, mz(r.y + r.h / 2));
+    new THREE.MeshStandardMaterial({ color: r.context ? 0x0d203b : r.hatch ? 0x1b3d66 : 0x16365e, roughness: 0.9 }), mx(r.x + r.w / 2), inside(r) ? 0.03 : 0.02, mz(r.y + r.h / 2), r.group === 'WH' ? whGroup : undefined);
   f.castShadow = false;
   if (r.name) {
     const grpArea = r.group ? layout.rooms.filter((q) => q.group === r.group).reduce((t, q) => t + q.w * q.h * U * U, 0) : 0;
@@ -118,9 +131,10 @@ for (const d of layout.doors) {
   const a0 = Math.atan2(oy - hy, ox - hx); let da = Math.atan2(cy - hy, cx - hx) - a0; if (da > Math.PI) da -= 2 * Math.PI; if (da < -Math.PI) da += 2 * Math.PI;
   const pts = [new THREE.Vector3(mx(hx), 0.06, mz(hy)), new THREE.Vector3(mx(ox), 0.06, mz(oy))];
   for (let i = 0; i <= 16; i++) { const a = a0 + da * i / 16; pts.push(new THREE.Vector3(mx(hx + r * Math.cos(a)), 0.06, mz(hy + r * Math.sin(a)))); }
-  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: d.exit ? 0xffb020 : 0xcfe6ff })));
+  const dg = inWH(hx, hy) ? whGroup : scene;
+  dg.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: d.exit ? 0xffb020 : 0xcfe6ff })));
   if (d.exit) {
-    const leaf = add(new THREE.BoxGeometry(r * U, 2.1, 0.05), new THREE.MeshStandardMaterial({ color: 0xffb020, transparent: true, opacity: 0.55 }), mx((hx + ox) / 2), 1.05, mz((hy + oy) / 2));
+    const leaf = add(new THREE.BoxGeometry(r * U, 2.1, 0.05), new THREE.MeshStandardMaterial({ color: 0xffb020, transparent: true, opacity: 0.55 }), mx((hx + ox) / 2), 1.05, mz((hy + oy) / 2), dg);
     leaf.rotation.y = -Math.atan2(oy - hy, ox - hx); leaf.userData.hover = { name: 'Emergency exit', sub: 'Keep clear' }; pickables.push(leaf);
   }
 }
@@ -131,6 +145,8 @@ function setPose(rec, x, z, rot) {
   rec.center.set(x, rec.height ? rec.height / 2 : 0.7, z);
 }
 const assets = new Map();       // id -> record
+const MS = Math.min(1, Math.max(0.5, Number(config.machineScale) || 0.85));   // machines drawn at 85 % of their footprint by default
+const FURNITURE = /^(bench|n2cab|metalcab|rack)$/;
 const STATEFUL = (a) => !/^(Work Bench|Bench|Table|Rack|Metal Rack|Metal Cabinet|ESD Shelves|IQC Workstations|N2 Cabinet|Cabinet|Dry Cabinet|Conveyor|Controller|Chiller)$/.test(a.type);
 function tower(rec, g, x, y, z) {
   add(new THREE.CylinderGeometry(0.02, 0.02, 0.35), M.steel, x, y + 0.17, z, g);
@@ -154,13 +170,25 @@ function facing(a) {             // degrees to turn a model so its back is to th
   if (/Table|Work Bench/.test(a.type)) gaps = a.h > a.w ? gaps.slice(0, 2) : gaps.slice(2);   // benches are worked from a long side
   return gaps.sort((p, q) => p[0] - q[0])[0][1];
 }
+// gap (plan units) between an item's back and its room's wall, or null when no real wall runs behind it (e.g. an open edge between floor pieces)
+const SNAP = 0.9;   // metres: items whose back is closer than this to a wall are drawn flush against it
+function wallGap(a, turn) {
+  const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
+  const r = layout.rooms.find((q) => q.name === a.room && cx >= q.x && cx <= q.x + q.w && cy >= q.y && cy <= q.y + q.h); if (!r) return null;
+  const [gap, horiz, c, mid] = turn === 90 ? [a.x - r.x, false, r.x, cy] : turn === -90 ? [r.x + r.w - a.x - a.w, false, r.x + r.w, cy]
+    : turn === 0 ? [a.y - r.y, true, r.y, cx] : [r.y + r.h - a.y - a.h, true, r.y + r.h, cx];
+  const walled = segs.some(([x1, y1, x2, y2]) => horiz
+    ? Math.abs(y1 - y2) < 0.01 && Math.abs(y1 - c) <= 1.5 && Math.min(x1, x2) <= mid && Math.max(x1, x2) >= mid
+    : Math.abs(x1 - x2) < 0.01 && Math.abs(x1 - c) <= 1.5 && Math.min(y1, y2) <= mid && Math.max(y1, y2) >= mid);
+  return walled ? gap : null;
+}
 function makeAsset(a) {
   const w = a.w * U, d = a.h * U, x = mx(a.x + a.w / 2), z = mz(a.y + a.h / 2);
-  const g = new THREE.Group(); scene.add(g);
+  const g = new THREE.Group(); (WH_NAMES.has(a.room) ? whGroup : scene).add(g);
   const rec = { a, g, meshes: [], state: 'NONE', ts: null, metrics: {}, stateful: STATEFUL(a) };
   const body = (geo, mat, px, py, pz) => { const m = add(geo, mat, px, py, pz, g); rec.meshes.push(m); return m; };
   let h;
-  const kind = kindOf(a);
+  const kind = kindOf(a); let rw = w, rd = d, ox = 0, oz = 0;   // rw, rd: drawn footprint; ox, oz: shift towards the wall (for the floor ring)
   if (kind) {
     // model built facing +z, then turned so its front faces the line aisle (SMT lines: west) or away from the nearest wall
     const turn = a.line ? -90 : facing(a), swap = Math.abs(turn) === 90;
@@ -174,6 +202,17 @@ function makeAsset(a) {
       if (o.pick !== false) rec.meshes.push(mesh); return mesh;
     };
     const r = build(kind, a, swap ? d : w, swap ? w : d, heightFor(a), put); h = r.h;
+    if (!FURNITURE.test(kind)) {   // shrink machines (config.machineScale): SMT line machines only across the line so conveyors still meet them
+      if (a.line) { m.scale.set(1, MS, MS); rw *= MS; } else { m.scale.setScalar(MS); rw *= MS; rd *= MS; }
+      h *= MS;
+    }
+    if (!a.line) {   // wall-side items sit flush against the wall (the shrink is taken from the aisle side, not the wall side)
+      const gap = wallGap(a, turn), D = swap ? w : d, sc = FURNITURE.test(kind) ? 1 : MS;
+      if (gap !== null && gap * U < SNAP) {
+        const sh = gap * U - 0.045 + (1 - sc) * D / 2, t = turn * Math.PI / 180;   // 0.045 m = half the wall thickness + 5 mm
+        ox = -Math.sin(t) * sh; oz = -Math.cos(t) * sh; m.position.x += ox; m.position.z += oz;
+      }
+    }
     if (rec.stateful && r.tower) tower(rec, m, ...r.tower);
   } else {
     h = heightFor(a);
@@ -194,7 +233,7 @@ function makeAsset(a) {
   }
   rec.height = h;
   if (rec.stateful) {   // state ring on the floor
-    const ring = add(new THREE.PlaneGeometry(w + 0.3, d + 0.3), new THREE.MeshBasicMaterial({ color: STATES.NONE.color, transparent: true, opacity: 0.35, depthWrite: false }), x, 0.045, z, g);
+    const ring = add(new THREE.PlaneGeometry(rw + 0.3, rd + 0.3), new THREE.MeshBasicMaterial({ color: STATES.NONE.color, transparent: true, opacity: 0.35, depthWrite: false }), x + ox, 0.045, z + oz, g);
     ring.rotation.x = -Math.PI / 2; ring.castShadow = false; rec.ring = ring;
   }
   rec.meshes.forEach((m) => { m.userData.asset = a.id; pickables.push(m); });
@@ -215,18 +254,18 @@ const lines = [1, 2, 3].map((n) => {
   return { n, convs: recs.filter((r) => r.arrows), ids: machines.map((r) => r.a.id), focus: pnp.a.id };
 });
 
-// command center interior from the drawing (kidney desk turned 180°, 3 seats facing the video wall)
+// Core X interior (kidney desk turned 180°, 3 seats facing the video wall; desk slightly longer than the 3.55 m video wall)
 const ccx = (v) => 542.6 + (v - 35) * 0.6535, ccy = (v) => 991.9 + (v - 183) * 0.6997;
-const kx = (v) => -v * 0.9 * 0.656 * U, ky = (v) => v * 0.9 * 0.6216 * U;
+const DS = 1.65;   // desk size factor: 3.9 m long against the 3.55 m video wall
+const kx = (v) => -v * 0.9 * DS * 0.656 * U, ky = (v) => v * 0.9 * DS * 0.6216 * U;
 const shape = new THREE.Shape(); shape.moveTo(kx(0), ky(-60));
 [[24, -60, 30, -38, 18, -18], [10, -6, 10, 6, 18, 18], [30, 38, 24, 60, 0, 60], [-26, 60, -32, 30, -32, 0], [-32, -30, -26, -60, 0, -60]].forEach((c) => shape.bezierCurveTo(kx(c[0]), ky(c[1]), kx(c[2]), ky(c[3]), kx(c[4]), ky(c[5])));
 const desk = add(new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.02, bevelSegments: 2 }), M.table, mx(ccx(345)), 0.75, mz(ccy(318)));
-desk.rotation.x = -Math.PI / 2; desk.userData.hover = { name: 'Command Center desk', sub: '' }; pickables.push(desk);
-add(new THREE.CylinderGeometry(0.08, 0.1, 0.72, 12), M.steel, mx(ccx(345)), 0.36, mz(ccy(318)));
-[-30, 0, 30].forEach((o) => { add(new THREE.BoxGeometry(0.5, 0.45, 0.5), M.chair, mx(ccx(297)), 0.25, mz(ccy(318 + o))); add(new THREE.BoxGeometry(0.08, 0.5, 0.5), M.chair, mx(ccx(297)) - 0.25, 0.7, mz(ccy(318 + o))); add(new THREE.BoxGeometry(0.04, 0.3, 0.45), M.dark, mx(ccx(355)), 0.95, mz(ccy(318 + o))); });
-const vw = add(new THREE.BoxGeometry(0.08, 1.3, 163 * 0.6216 * U), M.screen, mx(ccx(468)), 1.6, mz(ccy(326))); vw.userData.hover = { name: 'Video wall', sub: 'Command Center east wall' }; pickables.push(vw);
-[[190, 42], [412, 56]].forEach(([y0, hh]) => { const s = add(new THREE.BoxGeometry(21 * 0.656 * U, 2.0, hh * 0.6216 * U), M.cab, mx(ccx(468.5)), 1.0, mz(ccy(y0 + hh / 2))); s.userData.hover = { name: 'Storage cabinet', sub: 'Command Center' }; pickables.push(s); });
-const av = add(new THREE.BoxGeometry(40 * 0.656 * U, 2.0, 36 * 0.6216 * U), M.dark, mx(ccx(55)), 1.0, mz(ccy(432))); av.userData.hover = { name: 'AV rack', sub: 'Command Center' }; pickables.push(av);
+desk.rotation.x = -Math.PI / 2; desk.userData.hover = { name: 'Core X desk', sub: '' }; pickables.push(desk);
+[-1, 1].forEach((s) => add(new THREE.CylinderGeometry(0.08, 0.1, 0.72, 12), M.steel, mx(ccx(345)), 0.36, mz(ccy(318 + s * 40))));
+[-45, 0, 45].forEach((o) => { add(new THREE.BoxGeometry(0.5, 0.45, 0.5), M.chair, mx(ccx(283)), 0.25, mz(ccy(318 + o))); add(new THREE.BoxGeometry(0.08, 0.5, 0.5), M.chair, mx(ccx(283)) - 0.25, 0.7, mz(ccy(318 + o))); add(new THREE.BoxGeometry(0.04, 0.3, 0.45), M.dark, mx(ccx(362)), 0.95, mz(ccy(318 + o))); });
+const vw = add(new THREE.BoxGeometry(0.08, 1.3, 163 * 0.6216 * U), M.screen, mx(ccx(468)), 1.6, mz(ccy(326))); vw.userData.hover = { name: 'Video wall', sub: 'Core X east wall' }; pickables.push(vw);
+const av = add(new THREE.BoxGeometry(40 * 0.656 * U, 2.0, 36 * 0.6216 * U), M.dark, mx(ccx(55)), 1.0, mz(ccy(432))); av.userData.hover = { name: 'AV rack', sub: 'Core X' }; pickables.push(av);
 const glz = [[75, 470], [120, 432], [300, 432], [355, 470], [480, 470]].map(([p, q]) => [ccx(p), ccy(q)]);
 for (let i = 0; i < glz.length - 1; i++) {
   const a = new THREE.Vector3(mx(glz[i][0]), 0, mz(glz[i][1])), b = new THREE.Vector3(mx(glz[i + 1][0]), 0, mz(glz[i + 1][1]));
@@ -372,16 +411,23 @@ Object.entries(VIEWS).forEach(([id, [p, t]]) => document.getElementById(id).oncl
 cam.position.set(...VIEWS.vIso[0]); ctl.target.set(...VIEWS.vIso[1]);
 const toggle = (id, fn) => { const b = document.getElementById(id); b.onclick = () => { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); fn(on, b); }; };
 toggle('tWalls', (on) => walls.visible = on);
+const WH_KEY = 'grid-twin-warehouse', whParam = new URLSearchParams(location.search).get('warehouse');
+function setWarehouse(on) {
+  whGroup.visible = whWalls.visible = on; document.getElementById('tWh').setAttribute('aria-pressed', String(on));
+  try { localStorage.setItem(WH_KEY, on ? '1' : '0'); } catch {}
+}
+let whStart = true; try { whStart = localStorage.getItem(WH_KEY) !== '0'; } catch {}
+if (whParam === '0' || whParam === '1') whStart = whParam === '1';
+setWarehouse(whStart);
+toggle('tWh', (on) => setWarehouse(on));
 toggle('tTour', (on) => ctl.autoRotate = on);
-toggle('tDemo', (on) => startFeed(on));
 toggle('tFull', (on, b) => { const p = on ? document.documentElement.requestFullscreen?.() : document.exitFullscreen?.(); p?.catch?.(() => b.setAttribute('aria-pressed', 'false')); });
 document.addEventListener('fullscreenchange', () => document.getElementById('tFull').setAttribute('aria-pressed', String(!!document.fullscreenElement)));
-if (config.demoMode) document.getElementById('tDemo').setAttribute('aria-pressed', 'true');
 
 // ---------- hover & click ----------
 const ray = new THREE.Raycaster(), ptr = new THREE.Vector2(); let hovId = null, downAt = null;
 const tip = document.getElementById('tip'), tipT = document.getElementById('tipT'), tipS = document.getElementById('tipS');
-function hit(e) { const r = renderer.domElement.getBoundingClientRect(); ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(ptr, cam); return ray.intersectObjects(pickables, false)[0]; }
+function hit(e) { const r = renderer.domElement.getBoundingClientRect(); ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(ptr, cam); return ray.intersectObjects(pickables, false).find((h) => { for (let o = h.object; o; o = o.parent) if (!o.visible) return false; return true; }); }
 renderer.domElement.addEventListener('pointermove', (e) => {
   const h = hit(e); let title = null, sub = '';
   const id = h?.object.userData.asset;
@@ -552,21 +598,21 @@ if (new URLSearchParams(location.search).has('stats')) {
   const box = document.createElement('div');
   box.style.cssText = 'position:fixed;left:16px;bottom:12px;z-index:9;background:rgba(8,22,44,.94);border:1px solid #5fb4ff;border-radius:6px;padding:10px 12px;font:12px/1.5 ui-monospace,Consolas,monospace;color:#e6f0fb;white-space:pre;pointer-events:none';
   document.body.appendChild(box);
-  const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
-  const gpu = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  const d = describe(renderer), gpu = d.chip + (d.software ? '   (SOFTWARE, not the graphics chip)' : '');
   let frames = 0, t0 = performance.now(), fps = 0, worst = 0, prev = t0;
   renderer.info.autoReset = true;
   (function tick(now) {
     frames++; worst = Math.max(worst, now - prev); prev = now;
     if (now - t0 >= 1000) {
       fps = frames * 1000 / (now - t0); frames = 0; t0 = now;
-      const c = renderer.domElement, pr = renderer.getPixelRatio();
+      const c = renderer.domElement, pr = renderer.getPixelRatio(), f = frameStats(renderer);
       box.textContent = [
+        `Engine         ${d.engine} · ${d.route}`,
         `FPS            ${fps.toFixed(0)}   (slowest frame ${worst.toFixed(0)} ms)`,
         `Graphics chip  ${gpu.replace(/^ANGLE \(|\)$/g, '')}`,
         `Screen         ${screen.width} x ${screen.height} at ${Math.round(devicePixelRatio * 100)}% scaling`,
         `Drawing        ${c.width} x ${c.height} px = ${(c.width * c.height / 1e6).toFixed(1)} million px (x${pr})`,
-        `Per frame      ${renderer.info.render.calls} draw calls, ${(renderer.info.render.triangles / 1000).toFixed(0)}k triangles`,
+        `Per frame      ${f.calls} draw calls, ${(f.triangles / 1000).toFixed(0)}k triangles`,
         `Tour           ${ctl.autoRotate ? 'on' : 'off'}    Walls ${walls.visible ? 'on' : 'off'}`,
       ].join('\n');
       worst = 0;

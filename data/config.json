@@ -1,6 +1,6 @@
 {
-  "site": "F17",
-  "title": "F17 Production Digital Twin",
+  "site": "Grid",
+  "title": "Grid Production Digital Twin",
   "staleAfterSeconds": 30,
   "dataSource": {
     "type": "none",
@@ -8,5 +8,6 @@
     "restUrl": "/api/f17/state",
     "pollSeconds": 5
   },
-  "demoMode": false
+  "demoMode": false,
+  "machineScale": 0.765
 }
