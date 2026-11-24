@@ -8,6 +8,6 @@
     "restUrl": "/api/f17/state",
     "pollSeconds": 5
   },
-  "demoMode": false,
+  "demoMode": true,
   "machineScale": 0.765
 }

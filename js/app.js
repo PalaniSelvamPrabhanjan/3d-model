@@ -3,11 +3,27 @@ import { OrbitControls } from 'three/orbit';
 import { STATES, createFeed } from './feed.js';
 import { build, kindOf } from './models.js';
 import { ENGINE, createRenderer, describe, frameStats, onLoss } from './engine.js';
+import { buildWarehouse } from './warehouse.js';
 
 const [layout, config] = await Promise.all([
   fetch('data/layout.json').then((r) => r.json()),
   fetch('data/config.json').then((r) => r.json()).catch(() => ({ dataSource: { type: 'none' } })),
 ]);
+
+// demo data on or off: remembered per browser, ?demo=1 / ?demo=0 overrides, config.demoMode is the first-visit default
+const DEMO_KEY = 'grid-twin-demo', demoParam = new URLSearchParams(location.search).get('demo');
+let demoOn = !!config.demoMode; try { const v = localStorage.getItem(DEMO_KEY); if (v === '0' || v === '1') demoOn = v === '1'; } catch {}
+if (demoParam === '0' || demoParam === '1') demoOn = demoParam === '1';
+
+// 2D plan instead of 3D: asked for with ?mode=2d, or used automatically when this screen cannot draw 3D at all (js/plan2d.js)
+async function plan2D(reason) {
+  const { start2D } = await import('./plan2d.js');
+  start2D({ layout, config, demo: demoOn, reason });
+  await new Promise(() => {});   // stop here: nothing below (the 3D twin) runs
+}
+const NOTE = (html) => { const n = document.createElement('div'); n.className = 'safe-note'; n.innerHTML = html; document.body.appendChild(n); return n; };
+const with2D = () => location.pathname + (location.search ? location.search + '&' : '?') + 'mode=2d';
+if (new URLSearchParams(location.search).get('mode') === '2d') await plan2D('');
 
 // ---------- scene ----------
 const U = 0.035, CX = 700, CY = 640;          // 1 plan unit = 35 mm
@@ -20,26 +36,36 @@ if (gpulog) await gpulog.runGpuProbe();
 let renderer;
 try { renderer = await createRenderer(); }   // engine chosen by the address: see js/engine.js
 catch (err) {
-  document.getElementById('stage').innerHTML = `<p class="nojs">This screen cannot show 3D (${ENGINE === 'webgl' ? 'WebGL' : 'WebGPU and WebGL 2'} unavailable). Use a recent Chrome or Edge with hardware acceleration enabled.</p>`;
-  throw err;
+  console.warn('3D unavailable, showing the 2D plan instead:', err);
+  await plan2D(`3D is not available on this screen (${ENGINE === 'webgl' ? 'WebGL' : 'WebGPU and WebGL 2'} could not start)`);
 }
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = renderer.isWebGPURenderer ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;   // r187's WebGPU renderer has no PCFSoft
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 stage.appendChild(renderer.domElement);
-// if the graphics device is lost while on the WebGPU test engine, say so and offer the normal engine instead of leaving a blank screen
-if (ENGINE !== 'webgl') onLoss(renderer, (why) => {
-  const n = document.createElement('div'); n.className = 'engine-note';
-  n.innerHTML = `<b>The WebGPU engine stopped on this screen</b><span>${String(why).replace(/[<>&]/g, '')}</span><a href="${location.pathname}">Open with the normal engine</a>`;
-  document.body.appendChild(n);
-});
+// graphics reset (driver restart, casting change, sleep): WebGL comes back by itself and the twin redraws; if it has not
+// come back after 8 s, or on the WebGPU engine (which cannot come back), the page reloads. A second reset within 2 minutes
+// goes to the normal engine (WebGPU) or the 2D plan (WebGL) instead of reloading in a loop.
+let lostNote = null, lostTimer = 0;
+function recover() {
+  let last = 0; try { last = +sessionStorage.getItem('grid-twin-reset') || 0; sessionStorage.setItem('grid-twin-reset', String(Date.now())); } catch {}
+  if (Date.now() - last > 120000) location.reload();
+  else if (ENGINE !== 'webgl') location.href = location.pathname + location.search.replace(/([?&])engine=[^&]*&?/, '$1').replace(/[?&]$/, '');
+  else location.href = with2D();
+}
+onLoss(renderer, (why) => {
+  console.warn('Graphics reset:', why);
+  lostNote = lostNote || NOTE('<b>GRAPHICS RESET</b><span>The graphics driver restarted. Reconnecting…</span>');
+  clearTimeout(lostTimer); lostTimer = setTimeout(recover, ENGINE === 'webgl' ? 8000 : 1500);
+}, () => { clearTimeout(lostTimer); lostNote?.remove(); lostNote = null; invalidate(30); });
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x061021); scene.fog = new THREE.Fog(0x061021, 70, 150);
 const cam = new THREE.PerspectiveCamera(40, 1, 0.5, 400);   // near plane 0.5 m: 5x finer depth precision than 0.1, so touching surfaces don't fight
 const ctl = new OrbitControls(cam, renderer.domElement);
 ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI * 0.495; ctl.minDistance = 3; ctl.maxDistance = 120; ctl.autoRotateSpeed = 0.6;
 scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x0a1830, 0.9));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(-18, 34, 22); sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.03;   // no striped shadow acne Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, far: 90 }); scene.add(sun);
+sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.03;   // no striped shadow acne
+Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, far: 90 }); scene.add(sun);
 const base = new THREE.Mesh(new THREE.BoxGeometry(44, 0.3, 48), new THREE.MeshStandardMaterial({ color: 0x0a1a33, roughness: 0.95 }));
 base.position.set(0, -0.16, 2); base.receiveShadow = true; scene.add(base);
 const grid = new THREE.GridHelper(48, 32, 0x1d3a63, 0x12284a); grid.position.y = 0.005; grid.material.transparent = true; grid.material.opacity = 0.45; scene.add(grid);   // softer, coarser grid: less line shimmer while orbiting
@@ -62,9 +88,9 @@ const M = {
   chair: new THREE.MeshStandardMaterial({ color: 0x22313f, roughness: 0.7 }),
   wall: new THREE.MeshStandardMaterial({ color: 0x5fa8ff, transparent: true, opacity: 0.15, roughness: 0.3, depthWrite: false, side: THREE.DoubleSide }),
 };
-const lampOff = (c) => new THREE.MeshStandardMaterial({ color: new THREE.Color(c).multiplyScalar(0.25), roughness: 0.5 });
-const lampOn = (c) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.4 });
-const LAMP = { green: [lampOff(0x2ee06e), lampOn(0x2ee06e)], amber: [lampOff(0xffb020), lampOn(0xffb020)], red: [lampOff(0xff4a3d), lampOn(0xff4a3d)] };
+// status lamps: the three lamps of a tower are one mesh whose colours change (one draw call instead of three)
+const LAMP_HEX = [0x2ee06e, 0xffb020, 0xff4a3d], LAMP_ON = LAMP_HEX.map((h) => new THREE.Color(h)), LAMP_OFF = LAMP_HEX.map((h) => new THREE.Color(h).multiplyScalar(0.22));
+const LAMP_MAT = new THREE.MeshBasicMaterial({ vertexColors: true });
 
 function add(geo, mat, x, y, z, parent) {
   const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; (parent || scene).add(m); return m;
@@ -77,8 +103,8 @@ const WH_ROOMS = layout.rooms.filter((r) => r.group === 'WH');
 const WH_NAMES = new Set(WH_ROOMS.map((r) => r.name));
 const inWH = (x, y) => WH_ROOMS.some((r) => x >= r.x - 1.5 && x <= r.x + r.w + 1.5 && y >= r.y - 1.5 && y <= r.y + r.h + 1.5);
 const whGroup = new THREE.Group(); scene.add(whGroup);
-const whWalls = new THREE.Group(); whWalls.renderOrder = 10; walls.add(whWalls);   // red (restricted) warehouse walls
-const edge = new THREE.LineBasicMaterial({ color: 0x7cc4ff }), edgeRed = new THREE.LineBasicMaterial({ color: 0xff5a5a });
+const whWalls = new THREE.Group(); whWalls.renderOrder = 10; walls.add(whWalls);   // warehouse walls (restricted outline): drawn like the others, hidden with VIEW → Warehouse
+const edge = new THREE.LineBasicMaterial({ color: 0x7cc4ff });
 const WH = 2.6;
 // walls are collected first, then shared walls of neighbouring rooms are merged so no two transparent panels overlap (they shimmer as the camera moves)
 const segs = [];
@@ -104,7 +130,7 @@ function drawWall(x1, y1, x2, y2, red) {
   const a = new THREE.Vector3(mx(x1), 0, mz(y1)), b = new THREE.Vector3(mx(x2), 0, mz(y2)); const len = a.distanceTo(b); if (len < 0.01) return;
   const m = new THREE.Mesh(new THREE.BoxGeometry(len, WH, 0.08), M.wall);
   m.position.set((a.x + b.x) / 2, WH / 2, (a.z + b.z) / 2); m.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x); (red ? whWalls : walls).add(m);
-  (red ? whWalls : walls).add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, WH, a.z), new THREE.Vector3(b.x, WH, b.z)]), red ? edgeRed : edge));
+  (red ? whWalls : walls).add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, WH, a.z), new THREE.Vector3(b.x, WH, b.z)]), edge));
 }
 const inside = (r) => layout.rooms.some((o) => o !== r && o.w * o.h > r.w * r.h && r.x >= o.x - 0.5 && r.y >= o.y - 0.5 && r.x + r.w <= o.x + o.w + 0.5 && r.y + r.h <= o.y + o.h + 0.5);
 for (const r of layout.rooms) {
@@ -150,7 +176,12 @@ const FURNITURE = /^(bench|n2cab|metalcab|rack)$/;
 const STATEFUL = (a) => !/^(Work Bench|Bench|Table|Rack|Metal Rack|Metal Cabinet|ESD Shelves|IQC Workstations|N2 Cabinet|Cabinet|Dry Cabinet|Conveyor|Controller|Chiller)$/.test(a.type);
 function tower(rec, g, x, y, z) {
   add(new THREE.CylinderGeometry(0.02, 0.02, 0.35), M.steel, x, y + 0.17, z, g);
-  rec.lamps = ['green', 'amber', 'red'].map((c, i) => { const m = add(new THREE.CylinderGeometry(0.045, 0.045, 0.07, 12), LAMP[c][0], x, y + 0.38 + i * 0.075, z, g); m.userData.color = c; return m; });
+  const parts = [0, 1, 2].map((i) => new THREE.CylinderGeometry(0.045, 0.045, 0.07, 12).toNonIndexed().translate(x, y + 0.38 + i * 0.075, z));
+  const n = parts[0].attributes.position.count, pos = new Float32Array(n * 9), nor = new Float32Array(n * 9);
+  parts.forEach((p, i) => { pos.set(p.attributes.position.array, i * n * 3); nor.set(p.attributes.normal.array, i * n * 3); p.dispose(); });
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 9), 3));
+  rec.lamps = new THREE.Mesh(geo, LAMP_MAT); rec.lamps.userData.per = n; rec.lamps.castShadow = false; g.add(rec.lamps); setLamps(rec, 'NONE');
 }
 function monitor(g, x, y, z) { add(new THREE.BoxGeometry(0.04, 0.32, 0.42), M.dark, x, y, z, g); add(new THREE.BoxGeometry(0.01, 0.27, 0.37), M.screen, x - 0.025, y, z, g); }
 function heightFor(a) {
@@ -236,14 +267,40 @@ function makeAsset(a) {
     const ring = add(new THREE.PlaneGeometry(rw + 0.3, rd + 0.3), new THREE.MeshBasicMaterial({ color: STATES.NONE.color, transparent: true, opacity: 0.35, depthWrite: false }), x + ox, 0.045, z + oz, g);
     ring.rotation.x = -Math.PI / 2; ring.castShadow = false; rec.ring = ring;
   }
-  rec.meshes.forEach((m) => { m.userData.asset = a.id; pickables.push(m); });
   g.children.forEach((c) => { c.position.x -= x; c.position.z -= z; });
   g.position.set(x, 0, z); rec.home = { x, z, rot: a.rot || 0 };
   rec.center = new THREE.Vector3(x, h / 2, z);
   setPose(rec, x, z, a.rot || 0);
+  mergeParts(rec);
+  rec.meshes.forEach((m) => { m.userData.asset = a.id; pickables.push(m); });
   assets.set(a.id, rec); return rec;
 }
+// Each machine is built from many small parts. Parts that share a material are joined into one mesh, so the graphics chip
+// gets one draw call per material per machine instead of one per part. Status lamps, the floor ring and conveyor arrows stay
+// separate because they change while the twin runs.
+const _inv = new THREE.Matrix4(), _rel = new THREE.Matrix4();
+function mergeParts(rec) {
+  const keep = new Set([rec.lamps, rec.ring, ...(rec.arrows || [])]);
+  rec.g.updateMatrixWorld(true); _inv.copy(rec.g.matrixWorld).invert();
+  const byMat = new Map();
+  rec.g.traverse((o) => { if (o.isMesh && !keep.has(o)) { if (!byMat.has(o.material)) byMat.set(o.material, []); byMat.get(o.material).push(o); } });
+  const out = [];
+  for (const [mat, list] of byMat) {
+    if (list.length < 2) { out.push(...list); continue; }
+    const parts = list.map((o) => { const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone(); g.applyMatrix4(_rel.multiplyMatrices(_inv, o.matrixWorld)); return g; });
+    const n = parts.reduce((t, g) => t + g.attributes.position.count, 0), pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+    let off = 0;
+    for (const g of parts) { pos.set(g.attributes.position.array, off * 3); nor.set(g.attributes.normal.array, off * 3); off += g.attributes.position.count; g.dispose(); }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.computeBoundingBox(); geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, mat); mesh.castShadow = mesh.receiveShadow = true; rec.g.add(mesh);
+    list.forEach((o) => { o.parent.remove(o); o.geometry.dispose(); });
+    out.push(mesh);
+  }
+  rec.meshes = out;
+}
 layout.assets.forEach(makeAsset);
+const warehouse = buildWarehouse(THREE, { parent: whGroup, mx, mz, U, M, add, pickables, motion: new URLSearchParams(location.search).get('whmotion') === '1' });   // racking, robot, deposit points, desks: js/warehouse.js
 
 // SMT lines: flow arrows ride on each line's conveyors (printer → … → oven, south to north) and animate only when the whole line runs
 const lines = [1, 2, 3].map((n) => {
@@ -279,7 +336,13 @@ function effState(rec) { if (rec.state !== 'NONE' && rec.ts && Date.now() - rec.
 function paint(rec) {
   const s = effState(rec), col = STATES[s].color;
   if (rec.ring) { rec.ring.material.color.setHex(col); rec.ring.material.opacity = s === 'NONE' ? 0.25 : 0.55; }
-  if (rec.lamps) rec.lamps.forEach((m) => { const on = (s === 'RUN' && m.userData.color === 'green') || (s === 'IDLE' && m.userData.color === 'amber') || (s === 'DOWN' && m.userData.color === 'red'); m.material = LAMP[m.userData.color][on ? 1 : 0]; });
+  if (rec.lamps) setLamps(rec, s);
+}
+function setLamps(rec, s) {
+  if (rec.lampState === s) return; rec.lampState = s;
+  const on = { RUN: 0, IDLE: 1, DOWN: 2 }[s], col = rec.lamps.geometry.attributes.color, n = rec.lamps.userData.per;
+  for (let i = 0; i < 3; i++) { const c = i === on ? LAMP_ON[i] : LAMP_OFF[i]; for (let v = i * n; v < (i + 1) * n; v++) col.setXYZ(v, c.r, c.g, c.b); }
+  col.needsUpdate = true;
 }
 function ingest(msg) {
   const list = Array.isArray(msg) ? msg : msg.assets || [msg];
@@ -290,7 +353,7 @@ function ingest(msg) {
     if (u.metrics) Object.assign(rec.metrics, u.metrics);
     paint(rec);
   }
-  updateStates(); if (selected) showDetail(selected);
+  updateStates(); if (selected) showDetail(selected); invalidate();
 }
 let stopFeed = () => {};
 const statusEl = document.getElementById('status'), statusText = document.getElementById('statusText');
@@ -397,8 +460,8 @@ addEventListener('hashchange', () => select(decodeURIComponent(location.hash.sli
 // ---------- camera views ----------
 let tw = null;
 function flyTo(p, t) { if (matchMedia('(prefers-reduced-motion: reduce)').matches) { cam.position.copy(p); ctl.target.copy(t); return; } tw = { fp: cam.position.clone(), ft: ctl.target.clone(), p, t, s: performance.now() }; }
-const VIEWS = { vIso: [[-24, 30, 34], [0, 0, 2]], vTop: [[0, 70, 1.71], [0, 0, 1.7]], vSmt: [[-6, 11, 22], [mx(780), 0.8, mz(700)]], vHyb: [[mx(80), 17, mz(1230)], [mx(432), 0.5, mz(860)]] };
-const VNAME = { vIso: '3D', vTop: 'TOP', vSmt: 'SMT LINES', vHyb: 'HYBRID' };
+const VIEWS = { vIso: [[-24, 30, 34], [0, 0, 2]], vTop: [[0, 70, 1.71], [0, 0, 1.7]], vSmt: [[-6, 11, 22], [mx(780), 0.8, mz(700)]], vHyb: [[mx(80), 17, mz(1230)], [mx(432), 0.5, mz(860)]], vWhs: [[mx(800), 17, mz(262)], [mx(420), 0, mz(250)]] };
+const VNAME = { vIso: '3D', vTop: 'TOP', vSmt: 'SMT LINES', vHyb: 'HYBRID', vWhs: 'WAREHOUSE' };
 const menuBtn = document.getElementById('menuBtn'), menuPanel = document.getElementById('menuPanel');
 const setMenu = (open) => { menuPanel.hidden = !open; menuBtn.setAttribute('aria-expanded', String(open)); };
 menuBtn.onclick = (e) => { e.stopPropagation(); setMenu(menuPanel.hidden); };
@@ -407,8 +470,12 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menuPanel.hidden
 Object.entries(VIEWS).forEach(([id, [p, t]]) => document.getElementById(id).onclick = () => {
   flyTo(new THREE.Vector3(...p), new THREE.Vector3(...t)); Object.keys(VIEWS).forEach((k) => document.getElementById(k).setAttribute('aria-pressed', String(k === id)));
   document.getElementById('viewName').textContent = VNAME[id]; setMenu(false);
+  if (id === 'vWhs' && !whGroup.visible) setWarehouse(true);
 });
 cam.position.set(...VIEWS.vIso[0]); ctl.target.set(...VIEWS.vIso[1]);
+const startView = new URLSearchParams(location.search).get('view');   // ?view=warehouse (or smt, hybrid, top) opens on that camera
+const SV = { top: 'vTop', smt: 'vSmt', hybrid: 'vHyb', warehouse: 'vWhs' }[startView];
+if (SV) { cam.position.set(...VIEWS[SV][0]); ctl.target.set(...VIEWS[SV][1]); Object.keys(VIEWS).forEach((k) => document.getElementById(k).setAttribute('aria-pressed', String(k === SV))); document.getElementById('viewName').textContent = VNAME[SV]; }
 const toggle = (id, fn) => { const b = document.getElementById(id); b.onclick = () => { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); fn(on, b); }; };
 toggle('tWalls', (on) => walls.visible = on);
 const WH_KEY = 'grid-twin-warehouse', whParam = new URLSearchParams(location.search).get('warehouse');
@@ -421,6 +488,28 @@ if (whParam === '0' || whParam === '1') whStart = whParam === '1';
 setWarehouse(whStart);
 toggle('tWh', (on) => setWarehouse(on));
 toggle('tTour', (on) => ctl.autoRotate = on);
+
+// Demo data: made-up machine states so the twin can be shown without a live feed. Remembered per browser; ?demo=1 or ?demo=0 in the address overrides.
+document.getElementById('tDemo').setAttribute('aria-pressed', String(demoOn));
+toggle('tDemo', (on) => { try { localStorage.setItem(DEMO_KEY, on ? '1' : '0'); } catch {} startFeed(on); });
+
+// Hide panels: removes the controls and the equipment list for a clean wall screen. The PANELS button (top right) or the H key brings them back; ?panels=0 starts hidden.
+const PANELS_KEY = 'grid-twin-panels', panelsParam = new URLSearchParams(location.search).get('panels'), showPanels = document.getElementById('showPanels');
+function setPanels(hide) {
+  document.body.classList.toggle('clean', hide); showPanels.hidden = !hide;
+  document.getElementById('tPanels').setAttribute('aria-pressed', String(hide));
+  if (hide) setMenu(false);
+  try { localStorage.setItem(PANELS_KEY, hide ? '0' : '1'); } catch {}
+}
+let panelsHidden = false; try { panelsHidden = localStorage.getItem(PANELS_KEY) === '0'; } catch {}
+if (panelsParam === '0' || panelsParam === '1') panelsHidden = panelsParam === '0';
+setPanels(panelsHidden);
+document.getElementById('tPanels').onclick = () => setPanels(true);
+showPanels.onclick = () => { setPanels(false); menuBtn.focus(); };
+addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() !== 'h' || e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input, textarea')) return;
+  setPanels(!document.body.classList.contains('clean'));
+});
 toggle('tFull', (on, b) => { const p = on ? document.documentElement.requestFullscreen?.() : document.exitFullscreen?.(); p?.catch?.(() => b.setAttribute('aria-pressed', 'false')); });
 document.addEventListener('fullscreenchange', () => document.getElementById('tFull').setAttribute('aria-pressed', String(!!document.fullscreenElement)));
 
@@ -577,21 +666,74 @@ addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); document.getElementById('eUndo').click(); }
 });
 
-// ---------- loop ----------
+// ---------- loop: draw only when something changes ----------
+// Full speed while someone moves the camera, drags a machine or a view is flying; 30 frames a second while only
+// machine animations run (robot, conveyor arrows, Down pulses); no drawing at all when nothing moves.
 const clock = document.getElementById('clock');
-setInterval(() => { clock.textContent = new Date().toLocaleTimeString(); assets.forEach(paint); updateStates(); }, 1000);
-function size() { const w = stage.clientWidth, h = stage.clientHeight; renderer.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix(); }
+let need = 30;                                     // frames still to draw (start-up: let textures and shadows settle)
+const invalidate = (n = 2) => { need = Math.max(need, n); };
+ctl.addEventListener('change', () => invalidate());
+['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown', 'click'].forEach((ev) => addEventListener(ev, () => invalidate(), { passive: true, capture: true }));
+let stateSig = '';
+setInterval(() => {
+  clock.textContent = new Date().toLocaleTimeString(); assets.forEach(paint); updateStates();
+  const sig = [...assets.values()].map(effState).join(''); if (sig !== stateSig) { stateSig = sig; invalidate(); }   // a reading went stale
+}, 1000);
+function size() { const w = stage.clientWidth, h = stage.clientHeight; renderer.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix(); invalidate(); }
 addEventListener('resize', size); size();
+document.addEventListener('visibilitychange', () => invalidate(5));
+
+// automatic quality: if frames come too slowly, step down (lower resolution, then no shadows); step back up after a long smooth spell.
+// ?quality=high | medium | low | lowest fixes a level and turns the automatic choice off.
+const QUALITY = [
+  { name: 'high', ratio: 2, shadows: 2048 }, { name: 'medium', ratio: 1.25, shadows: 1024 },
+  { name: 'low', ratio: 1, shadows: 0 }, { name: 'lowest', ratio: 0.75, shadows: 0 },
+];
+const qParam = new URLSearchParams(location.search).get('quality'), qFixed = QUALITY.findIndex((q) => q.name === qParam);
+const quality = { level: qFixed >= 0 ? qFixed : 0, auto: qFixed < 0, samples: [], good: 0, ups: 0 };
+function setQuality(i) {
+  quality.level = i; const q = QUALITY[i];
+  renderer.setPixelRatio(Math.min(devicePixelRatio, q.ratio));
+  sun.castShadow = q.shadows > 0;
+  if (q.shadows && sun.shadow.mapSize.x !== q.shadows) { sun.shadow.mapSize.set(q.shadows, q.shadows); sun.shadow.map?.dispose(); sun.shadow.map = null; }
+  size(); quality.samples = []; quality.good = 0;
+}
+setQuality(quality.level);
+function judge(ms) {   // ms between two frames that were both drawn
+  if (!quality.auto || document.hidden || ms > 3000) return;
+  const S = quality.samples; S.push(ms);
+  if (S.length < 45 && !(S.length >= 6 && S.reduce((t, v) => t + v, 0) > 3000)) return;   // decide after 45 frames, or after 3 s on a very slow screen
+  const med = [...S].sort((a, b) => a - b)[S.length >> 1]; S.length = 0;
+  if (med > 125 && quality.level === QUALITY.length - 1 && !quality.noted) {   // still under 8 frames a second at the lowest quality: offer the 2D plan
+    quality.noted = true;
+    const n = NOTE(`<b>SLOW SCREEN</b><span>${describe(renderer).software ? 'This screen draws 3D without its graphics chip, so it is slow.' : '3D runs very slowly on this screen.'} The 2D plan shows the same machines and states and runs on anything.</span><a href="${with2D()}">Switch to 2D plan</a><button type="button">Keep 3D</button>`);
+    n.querySelector('button').onclick = () => n.remove();
+  }
+  if (med > 40 && quality.level < QUALITY.length - 1) { setQuality(quality.level + 1); return; }   // under 25 frames a second
+  if (med < 20 && quality.level > 0 && quality.ups < 2) { if (++quality.good >= 10) { quality.ups++; setQuality(quality.level - 1); } }
+  else quality.good = 0;
+}
+
+let last = performance.now(), lastDraw = 0, drewLast = false;
 renderer.setAnimationLoop((now) => {
-  if (tw) { const k = Math.min(1, (now - tw.s) / 900), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; cam.position.lerpVectors(tw.fp, tw.p, e); ctl.target.lerpVectors(tw.ft, tw.t, e); if (k >= 1) tw = null; }
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  let anim = false;
+  if (tw) { const k = Math.min(1, (now - tw.s) / 900), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; cam.position.lerpVectors(tw.fp, tw.p, e); ctl.target.lerpVectors(tw.ft, tw.t, e); if (k >= 1) tw = null; invalidate(); }
   for (const L of lines) {
-    const run = L.ids.length && L.ids.every((id) => effState(assets.get(id)) === 'RUN');
+    const run = L.ids.length && L.ids.every((id) => effState(assets.get(id)) === 'RUN'); if (run && L.convs.length) anim = true;
     L.convs.forEach((r) => r.arrows.forEach((c, i) => { const len = c.userData.len, t = run ? ((now / 1000 * 0.5 + i * len / 2) % len) : i * len / 2; c.position.z = c.userData.z0 + len / 2 - t; c.material.emissiveIntensity = run ? 1.5 : 0.4; }));
   }
   const pulse = 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(now / 250));
-  assets.forEach((r) => { if (r.ring && effState(r) === 'DOWN') { r.ring.material.opacity = pulse; r.ring.scale.setScalar(1 + 0.08 * Math.sin(now / 250)); } else if (r.ring) r.ring.scale.setScalar(1); });
-  ctl.update(); renderer.render(scene, cam);
+  assets.forEach((r) => { if (r.ring && effState(r) === 'DOWN') { anim = true; r.ring.material.opacity = pulse; r.ring.scale.setScalar(1 + 0.08 * Math.sin(now / 250)); } else if (r.ring) r.ring.scale.setScalar(1); });
+  if (warehouse.tick(dt)) anim = true;
+  const moved = ctl.update(); if (moved) anim = true;   // the slow tour orbit counts as an animation (30 a second)
+  const busy = need > 0 || (moved && !ctl.autoRotate) || drag;
+  if (document.hidden || (!busy && (!anim || now - lastDraw < 1000 / 30 - 3))) { drewLast = false; return; }
+  if (drewLast) judge(now - lastDraw);
+  need = Math.max(0, need - 1); lastDraw = now; drewLast = true;
+  renderer.render(scene, cam); frameCount++;
 });
+let frameCount = 0;   // frames actually drawn (the ?stats readout shows them per second)
 
 // ---------- diagnostics: add ?stats=1 to the address to show a performance readout ----------
 if (new URLSearchParams(location.search).has('stats')) {
@@ -599,16 +741,18 @@ if (new URLSearchParams(location.search).has('stats')) {
   box.style.cssText = 'position:fixed;left:16px;bottom:12px;z-index:9;background:rgba(8,22,44,.94);border:1px solid #5fb4ff;border-radius:6px;padding:10px 12px;font:12px/1.5 ui-monospace,Consolas,monospace;color:#e6f0fb;white-space:pre;pointer-events:none';
   document.body.appendChild(box);
   const d = describe(renderer), gpu = d.chip + (d.software ? '   (SOFTWARE, not the graphics chip)' : '');
-  let frames = 0, t0 = performance.now(), fps = 0, worst = 0, prev = t0;
+  let frames = 0, t0 = performance.now(), fps = 0, worst = 0, prev = t0, drawn0 = frameCount;
   renderer.info.autoReset = true;
   (function tick(now) {
     frames++; worst = Math.max(worst, now - prev); prev = now;
     if (now - t0 >= 1000) {
-      fps = frames * 1000 / (now - t0); frames = 0; t0 = now;
+      fps = frames * 1000 / (now - t0); const drawn = (frameCount - drawn0) * 1000 / (now - t0); drawn0 = frameCount; frames = 0; t0 = now;
       const c = renderer.domElement, pr = renderer.getPixelRatio(), f = frameStats(renderer);
       box.textContent = [
         `Engine         ${d.engine} · ${d.route}`,
         `FPS            ${fps.toFixed(0)}   (slowest frame ${worst.toFixed(0)} ms)`,
+        `Drawn          ${drawn.toFixed(0)} frames/s   (0 = nothing moving, nothing to redraw)`,
+        `Quality        ${QUALITY[quality.level].name}${quality.auto ? ' (automatic)' : ' (fixed by address)'}   shadows ${sun.castShadow ? 'on' : 'off'}`,
         `Graphics chip  ${gpu.replace(/^ANGLE \(|\)$/g, '')}`,
         `Screen         ${screen.width} x ${screen.height} at ${Math.round(devicePixelRatio * 100)}% scaling`,
         `Drawing        ${c.width} x ${c.height} px = ${(c.width * c.height / 1e6).toFixed(1)} million px (x${pr})`,
@@ -621,8 +765,9 @@ if (new URLSearchParams(location.search).has('stats')) {
   })(t0);
 }
 
+if (new URLSearchParams(location.search).has('stats')) window.twinScene = scene;   // for checking from the developer panel
 if (gpulog) gpulog.watchRenderer(renderer);
 
-startFeed(!!config.demoMode);
+startFeed(demoOn);
 renderList();
 if (location.hash.length > 1) select(decodeURIComponent(location.hash.slice(1)), true);

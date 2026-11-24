@@ -37,16 +37,24 @@
         <button id="vTop" aria-pressed="false">Top view</button>
         <button id="vSmt" aria-pressed="false">SMT lines</button>
         <button id="vHyb" aria-pressed="false">Hybrid Room</button>
+        <button id="vWhs" aria-pressed="false">Smart Warehouse</button>
         <p class="mh">DISPLAY</p>
         <button id="tWalls" aria-pressed="true">Walls</button>
         <button id="tWh" aria-pressed="true" title="Show or hide the Smart Warehouse">Warehouse</button>
         <button id="tTour" aria-pressed="false" title="Slowly orbit the floor, for a wall screen">Tour (slow orbit)</button>
         <button id="tFull" aria-pressed="false">Full screen</button>
+        <button id="tPanels" aria-pressed="false" title="Hide the controls and the equipment list, for a wall screen (key H)">Hide panels</button>
+        <p class="mh">DATA</p>
+        <button id="tDemo" aria-pressed="false" title="Fill the twin with made-up machine states to show how it looks with live data">Demo data</button>
       </div>
     </div>
     <button id="tEdit" aria-pressed="false" title="Drag machines to new positions">EDIT LAYOUT</button>
   </nav>
 </header>
+
+<button id="showPanels" class="show-panels" hidden title="Show the controls and the equipment list (key H)">
+  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>PANELS</span>
+</button>
 
 <aside class="panel list" id="listPanel" aria-label="Equipment">
   <div class="panel-head">

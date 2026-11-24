@@ -12,7 +12,8 @@ A browser-based 3D digital twin of the Grid production and store rooms (Level 1)
 - Conformal Coating / Degreaser
 - IQC and the Changing Room
 - Core X
-- Smart Warehouse, corridors and lobbies (for context)
+- Smart Warehouse (unmanned: bin racking, bin-picking robot, deposit points, store work desks)
+- Corridors and lobbies (for context)
 
 ## Contents
 
@@ -99,18 +100,29 @@ No database or back end is needed. The only file you'll change routinely is `dat
 3. Open **VIEW** and pick a camera, or **Tour (slow orbit)** for an unattended display.
 4. To show one machine on start-up, add its ID to the URL: `http://server/f17-twin/#L2-PNP1`.
 5. To start with the Smart Warehouse hidden or shown regardless of the saved choice, add `?warehouse=0` or `?warehouse=1` to the address.
+6. Other start-up options for the address (combine them with `&`):
 
-A mid-range office PC with integrated graphics is enough. The scene is about 1,400 parts and 37,000 triangles (about 1,500 draw calls, plus the shadow pass), with soft shadows. The page uses about 17 MB of JavaScript memory.
+| Option | Effect |
+|---|---|
+| `?view=warehouse` | Open on a camera: `warehouse`, `smt`, `hybrid` or `top` |
+| `?panels=0` | Open with the controls and equipment list hidden |
+| `?demo=1` / `?demo=0` | Demo data on or off |
+| `?quality=high` | Fix the drawing quality: `high`, `medium`, `low` or `lowest` (normally automatic) |
+| `?mode=2d` | Show the 2D floor plan instead of 3D |
+
+Example for a casting screen: `?view=warehouse&panels=0&demo=1`.
+
+A mid-range office PC with integrated graphics is enough. The scene is about 840 draw calls and 43,000 triangles, plus the shadow pass. It only redraws when something changes (see [Performance and recovery](#performance-and-recovery)).
 
 ---
 
 ## Using the twin
 
 ### Top bar
-- **Status pill:** shows **No live data**, **Connecting**, **Live**, **Reconnecting** or **Demo data** (only if demo mode is switched on in `data/config.json`).
+- **Status pill:** shows **No live data**, **Connecting**, **Live**, **Reconnecting** or **Demo data** (while **View → Demo data** is on).
 - **Clock**
 - **VIEW** dropdown:
-  - Camera: **3D overview**, **Top view**, **SMT lines**, **Hybrid Room**
+  - Camera: **3D overview**, **Top view**, **SMT lines**, **Hybrid Room**, **Smart Warehouse**
   - Display: **Walls**, **Warehouse** (show or hide the Smart Warehouse; remembered in that browser), **Tour (slow orbit)**, **Full screen**
 - **EDIT LAYOUT** (see [Editing the layout](#editing-the-layout))
 
@@ -194,7 +206,7 @@ Set `dataSource.type` in `data/config.json`:
     "restUrl": "/api/f17/state",
     "pollSeconds": 5
   },
-  "demoMode": false,
+  "demoMode": true,
   "machineScale": 0.765
 }
 ```
@@ -235,7 +247,9 @@ The usual set-ups are:
 Keep the gateway on the plant network. The browser only ever reads.
 
 ### Demo data
-Setting `"demoMode": true` in `data/config.json` fills the model with random states for training and screen tests. There is no button for it on screen. It is off by default, and the status pill says **Demo data** while it's on. Benches, cabinets, racks and conveyors never get a state.
+**View → Demo data** fills the model with made-up machine states, so the twin can be shown before a live feed is connected. The status pill says **Demo data** while it's on. Each browser remembers the choice; `"demoMode"` in `data/config.json` sets what a first-time visitor sees (currently on), and `?demo=1` or `?demo=0` in the address overrides both. Benches, cabinets, racks and conveyors never get a state.
+
+**View → Hide panels** removes the controls and the equipment list, leaving the title, clock and the 3D floor, for a wall screen. Bring them back with the **PANELS** button at the top right or the **H** key. `?panels=0` opens the page with the panels hidden, for example `?panels=0&demo=1` for a casting screen.
 
 ---
 
@@ -280,7 +294,9 @@ f17-twin/
 ├── css/style.css         control-room theme and layout
 ├── js/app.js             scene, rooms, walls, doors, UI, selection, views, editing
 ├── js/models.js          3D machine models, one per machine family
-js/engine.js          picks the 3D engine from the address and reports what it draws with
+├── js/warehouse.js       Smart Warehouse interior: racking, robot, deposit points, desks
+├── js/plan2d.js          2D floor plan (fallback, or ?mode=2d)
+├── js/engine.js          picks the 3D engine from the address and reports what it draws with
 ├── js/feed.js            live-data adapter (WebSocket / REST / demo)
 ├── data/layout.json      rooms, room outlines, doors and all assets
 ├── data/config.json      data source and stale timeout
@@ -305,7 +321,7 @@ vendor/three-r187/    three.js r187 WebGPU build + OrbitControls (MIT licence), 
 | `context` | Outside the production area (drawn darker, no walls) |
 | `hatch` | Store or plant room shading |
 | `corridor` | Drawn without walls |
-| `restricted` | Red wall edges |
+| `restricted` | Restricted area. For the Smart Warehouse outline, its walls hide with **View → Warehouse** (drawn in the normal wall colour) |
 | `group` | Several floor pieces that form one room; their walls come from `outlines` |
 
 ### outlines[]
@@ -381,6 +397,33 @@ One polygon per grouped room: `{ "points": [[x,y], …], "restricted": true }`.
 **Exact vendor shapes:** if vendors supply CAD, convert it to GLB and load it with three.js `GLTFLoader` in place of the matching `case`.
 
 ---
+
+## Smart Warehouse
+
+The warehouse is an unmanned automated bin store (a mini-load system) with one stacker crane; nobody enters the fenced storage area. There are no conveyors at the moment: staff put bins in and take them out at two stands at the end of the crane aisle. The interior is built in `js/warehouse.js` (positions in plan units at the top of that file) rather than in `layout.json`, so it is not in the equipment list and cannot be moved in the layout editor.
+
+| Item | Where | Notes |
+|---|---|---|
+| Bin racking | Inside the fence | Grey, braced upright frames. Two double-deep racks, one each side of the aisle; 7 bays, 5 levels, 2.4 m high, 280 places for 600 × 400 × 300 mm bins |
+| Stacker crane (1) | In the aisle | Mini-load crane on a floor rail with a top guide rail; telescopic forks reach both bin depths on either side |
+| Drop-off and pick-up stands | West end of the aisle, in the fence | Staff put bins on the north stand for the crane to store; the crane puts requested bins on the south stand |
+| Bin deposit point 1 | West wall, either side of the double door | Counters; a work desk for now, final design to follow |
+| Bin deposit point 2 | South wall | Collection-point locker bank with a kiosk, doors facing into the room |
+| Safety fence | Around the racking | 1.5 m wire mesh, yellow posts, yellow floor tape inside, locked maintenance gate in the north fence |
+| Store work desks (3) | North wall | Short end against the wall, worked from the west side |
+
+The warehouse shows no demo data: the crane stands parked at the stands and Demo data does not affect it. For a presentation, `?whmotion=1` plays an illustrative movement (not live data): drop-off stand → rack, then rack → pick-up stand.
+
+## Performance and recovery
+
+- **Draws only when needed.** Full speed while someone moves the camera or drags a machine. 30 frames a second while only animations run (the robot, conveyor arrows, Down pulses, the tour orbit). Nothing at all when nothing moves.
+- **Automatic quality.** If frames come slower than 25 a second, the twin steps down: lower resolution and smaller shadows, then no shadows, then lower resolution again. After a long smooth spell it steps back up (at most twice). `?quality=` fixes a level.
+- **Fewer draw calls.** Each machine's parts are joined into one mesh per material, and each tower's three status lamps are one mesh. That brought the scene from about 1,500 to about 840 draw calls.
+- **Slow screen.** If a screen is still under 8 frames a second at the lowest quality, a notice offers the 2D plan.
+- **Graphics reset.** If the graphics driver restarts, a notice appears and the twin redraws when the graphics come back. If they have not come back after 8 seconds (or straight away on the WebGPU engine), the page reloads. A second reset within 2 minutes opens the normal engine (from WebGPU) or the 2D plan (from WebGL) instead of reloading again.
+- **2D plan.** If a screen cannot draw 3D at all, the twin shows a flat floor plan (`js/plan2d.js`) with the same rooms, machines, layout edits and live or demo states. Wheel to zoom, drag to pan, double-click to fit. **Try 3D** returns to 3D.
+
+The `?stats=1` readout shows **Drawn** (frames actually drawn each second; 0 means nothing is moving) and **Quality**.
 
 ## Rendering notes
 
