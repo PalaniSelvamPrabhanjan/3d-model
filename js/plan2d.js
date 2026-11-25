@@ -70,9 +70,9 @@ export function start2D({ layout, config, demo, reason }) {
   const sum = document.createElement('div'); sum.className = 'panel plan2d-sum'; document.body.appendChild(sum);
   function summary() {
     const n = { RUN: 0, IDLE: 0, DOWN: 0, MAINT: 0, NONE: 0 };
-    items.forEach((it) => { if (it.stateful) n[effState(it)] = (n[effState(it)] || 0) + 1; });
+    items.forEach((it) => { if (it.stateful) { const s = effState(it) === 'OFF' ? 'NONE' : effState(it); n[s] = (n[s] || 0) + 1; } });
     sum.innerHTML = `<p><b>2D PLAN</b>${reason ? `<span>${reason}</span>` : ''}<a href="${location.pathname}${location.search.replace(/([?&])mode=2d&?/, '$1').replace(/[?&]$/, '')}">Try 3D</a></p>` +
-      `<div class="summary">${[['RUN', 'Running'], ['IDLE', 'Idle'], ['DOWN', 'Down'], ['MAINT', 'Maint.'], ['NONE', 'No data']].map(([s, l]) => `<div><b style="color:${STATES[s].css}">${n[s]}</b><span>${l}</span></div>`).join('')}</div>`;
+      `<div class="summary">${[['RUN', 'Running'], ['IDLE', 'Idle'], ['DOWN', 'Down'], ['MAINT', 'Maint.'], ['NONE', 'Off / no data']].map(([s, l]) => `<div><b style="color:${STATES[s].css}">${n[s]}</b><span>${l}</span></div>`).join('')}</div>`;
   }
   const statusEl = document.getElementById('status'), statusText = document.getElementById('statusText');
   createFeed({ ...config, demoMode: demo }, items.filter((i) => i.stateful).map((i) => i.a.id), (msg) => {
@@ -80,7 +80,7 @@ export function start2D({ layout, config, demo, reason }) {
     summary(); draw();
   }, (kind, text) => {
     statusEl.className = 'pill pill-' + kind; statusEl.title = text || '';
-    statusText.textContent = { none: 'No live data', live: 'Live', demo: 'Demo data', connecting: 'Connecting', reconnecting: 'Reconnecting', error: 'Feed error' }[kind] || kind;
+    statusText.textContent = { none: 'No live data', live: 'Live', demo: 'Active', connecting: 'Connecting', reconnecting: 'Reconnecting', error: 'Feed error' }[kind] || kind;
   });
   const clock = document.getElementById('clock');
   setInterval(() => { clock.textContent = new Date().toLocaleTimeString(); summary(); draw(); }, 1000);

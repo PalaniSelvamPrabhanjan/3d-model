@@ -26,7 +26,7 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .pill{display:inline-flex;align-items:center;gap:6px;font:600 11px/1 var(--display);letter-spacing:.1em;text-transform:uppercase;padding:4px 8px;border-radius:20px;border:1px solid var(--line)}
 .pill i{width:8px;height:8px;border-radius:50%;background:var(--none)}
 .pill-live i{background:var(--run);box-shadow:0 0 8px var(--run)}
-.pill-demo{border-color:var(--exit);color:#ffd27a}.pill-demo i{background:var(--exit)}
+.pill-demo i{background:var(--run);box-shadow:0 0 8px var(--run)}   /* demo scene: shown as Active (hover the pill to see it is demo data) */
 .pill-error i,.pill-reconnecting i{background:var(--down)}
 .pill-connecting i{background:var(--idle)}
 .clock{font:500 12px/1 var(--display);color:var(--muted);font-variant-numeric:tabular-nums;letter-spacing:.06em}

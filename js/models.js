@@ -192,6 +192,18 @@ export function build(kind, a, W, D, H, put) {
       P(box(W * 0.4, 0.14, 0.02), C.screen, 0, h * 0.86, D / 2 + 0.01, { pick: false });
       P(box(W, 0.05, D), C.grey, 0, h * 0.4, 0, { pick: false }); tw = [W * 0.3, h, -D * 0.3]; break;
     }
+    case 'oven': {           // N2 baking oven: stainless cabinet on a plinth, door with a small window and handle, controller and N2 flow meter above
+      const base = 0.12, top = h - 0.32;
+      P(box(W, base, D), C.char, 0, base / 2, 0, { pick: false });
+      P(box(W, top - base, D), C.steel, 0, (base + top) / 2, 0);
+      P(box(W * 0.82, (top - base) * 0.82, 0.03), C.light, -W * 0.03, (base + top) / 2, D / 2 + 0.015);
+      P(box(W * 0.34, (top - base) * 0.26, 0.01), C.smoke, -W * 0.03, (base + top) / 2 + 0.12, D / 2 + 0.035, { pick: false });
+      P(box(0.04, (top - base) * 0.4, 0.05), C.char, W * 0.33, (base + top) / 2, D / 2 + 0.05, { pick: false });
+      P(box(W, 0.32, D), C.light, 0, h - 0.16, 0);
+      P(box(W * 0.36, 0.16, 0.01), C.screen, -W * 0.2, h - 0.16, D / 2 + 0.006, { pick: false });
+      P(cyl(0.025, 0.2, 12), C.smoke, W * 0.25, h - 0.16, D / 2 + 0.03, { pick: false });
+      tw = [W * 0.38, h, -D * 0.3]; break;
+    }
     case 'pactech': {        // PacTech SB²-Jet: white cabinet with a grey glass laser cell and an operator screen
       const base = 0.9; P(box(W, base, D), C.white, 0, base / 2, 0);
       glassCase(W, h - base - 0.25, D, base, C.grey); P(box(W, 0.25, D), C.light, 0, h - 0.125, 0);
@@ -344,6 +356,7 @@ export function kindOf(a) {
   if (t === 'Wave Soldering') return 'interselect';
   if (t === 'Degreaser') return 'degreaser';
   if (t === 'Conformal Coater') return 'coater';
+  if (t === 'N2 Oven') return 'oven';
   if (t === 'N2 Cabinet' || t === 'Dry Cabinet') return 'n2cab';
   if (/Metal Cabinet|^Cabinet$/.test(t)) return 'metalcab';
   if (/Rack|ESD Shelves/.test(t)) return 'rack';

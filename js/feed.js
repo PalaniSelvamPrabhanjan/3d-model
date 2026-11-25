@@ -15,7 +15,7 @@ export const STATES = {
 export function createFeed(config, assetIds, onMessage, onStatus) {
   const src = config.dataSource || { type: 'none' };
   let stop = () => {};
-  if (config.demoMode) return demoFeed(assetIds, onMessage, onStatus);
+  if (config.demoMode) return demoFeed(assetIds, onMessage, onStatus, Array.isArray(config.demoRunning) ? config.demoRunning : undefined);
   if (src.type === 'websocket') {
     let ws, retry = 1000, closed = false;
     const open = () => {
@@ -46,15 +46,20 @@ export function createFeed(config, assetIds, onMessage, onStatus) {
   return stop;
 }
 
-// Demo feed: clearly labelled in the UI, off by default (config.demoMode or the DEMO switch).
-function demoFeed(ids, onMessage, onStatus) {
-  onStatus('demo', 'Demo data — not real machine states');
-  const pick = () => { const r = Math.random(); return r < 0.78 ? 'RUN' : r < 0.9 ? 'IDLE' : r < 0.96 ? 'DOWN' : 'MAINT'; };
-  const machines = ids.filter((id) => !/-(WB|BN|CAB|N2C|DRY|RACK|ESD|WS)-/.test(id));
-  onMessage({ assets: machines.map((id) => ({ id, state: pick(), ts: new Date().toISOString(), metrics: { oee: +(0.6 + Math.random() * 0.35).toFixed(2) } })) });
-  const t = setInterval(() => {
-    const id = machines[Math.floor(Math.random() * machines.length)];
-    onMessage({ assets: [{ id, state: pick(), ts: new Date().toISOString(), metrics: { oee: +(0.6 + Math.random() * 0.35).toFixed(2) } }] });
-  }, 2500);
+// Demo feed (config.demoMode or VIEW → Demo data): a fixed scene instead of live data. The machines listed in
+// config.demoRunning are Running and every other machine is Powered off. An entry ending in * matches every id that
+// starts with it ("L2-*" = all of SMT line 2). The status pill shows "Active"; hovering it says the states are demo data.
+const DEFAULT_RUNNING = ['L2-*'];
+function demoFeed(ids, onMessage, onStatus, running = DEFAULT_RUNNING) {
+  onStatus('demo', 'Demo data: not real machine states');
+  const match = (id) => running.some((r) => (r.endsWith('*') ? id.startsWith(r.slice(0, -1)) : id === r));
+  const machines = ids.filter((id) => !/-(WB|BN|CAB|N2C|DRY|RACK|ESD|WS|SHF)-/.test(id));
+  const oee = {}; machines.forEach((id) => { oee[id] = +(0.72 + Math.random() * 0.2).toFixed(2); });
+  const send = () => onMessage({ assets: machines.map((id) => {
+    const on = match(id);
+    return { id, state: on ? 'RUN' : 'OFF', ts: new Date().toISOString(), ...(on ? { metrics: { oee: oee[id] } } : {}) };
+  }) });
+  send();
+  const t = setInterval(send, 10000);   // refresh so the readings never go stale
   return () => clearInterval(t);
 }

@@ -2,25 +2,27 @@
 //   - grey double-deep bin racking almost to the ceiling on both sides of one aisle: braced upright frames, beams,
 //     large plastic bins (600 x 400 x 300 mm)
 //   - one mini-load stacker crane in the aisle, on a floor rail with a top guide rail
+//   - the racking and its fence run west almost to the west wall, ending at bin deposit point 1
 //   - two pick-up / drop-off stands at the west end of the aisle, set in the fence: staff put bins in on one and take
 //     them out from the other (no conveyors at the moment)
-//   - bin deposit point 1: counters along the west wall either side of the double door (work desk for now)
+//   - bin deposit point 1: a counter on the west wall, north of the double door, facing the stands (work desk for now)
 //   - bin deposit point 2: a collection-point locker bank along the south wall
-//   - three store-room work desks, short end against the north wall
+//   - four store-room work desks on the north wall: three with their short end against it, one facing it
 // Positions are in plan units (1 unit = 35 mm), the same as data/layout.json. Everything goes into the warehouse group
 // so VIEW → Warehouse hides it with the room. The crane stands parked; ?whmotion=1 plays an illustrative movement.
 
 const U0 = 0.035, m = (metres) => metres / U0;
 const WALL = { w: 186.2, n: 48, e: 622.9, s: 418.3 };               // west, north, east walls of the big room; south wall of the lower strip
 const RD = m(1.25), AW = m(1.1);                                    // double-deep rack depth, aisle width
-const RX = [410, 595];                                              // racking runs east–west between these x
-const RN = 160, AISLE = RN + RD + AW / 2, RS = RN + RD + AW;         // north rack edge, aisle centre, south rack edge
-const F = { w: 389, n: 148, s: RS + RD + 12 };                      // fence: west line (stands sit in it), north and south lines; east is the wall
-const MOUTH = 398;                                                  // x of the pick-up / drop-off stands
-const GATE = [410, 440];                                            // maintenance gate in the north fence
-const COUNTERS = [[128, 230], [270, 362]], COUNTER_D = m(0.8);      // deposit point 1 along the west wall (door at y 238–262)
+const RX = [257, 595];                                              // racking runs east–west between these x
+const RN = 150, AISLE = RN + RD + AW / 2, RS = RN + RD + AW;         // north rack edge, aisle centre, south rack edge
+const F = { w: 236, n: RN - m(1), s: RS + RD + m(1) };             // fence: west line (stands sit in it), north and south lines 1 m off the racks; east is the wall
+const MOUTH = 244;                                                  // x of the pick-up / drop-off stands
+const GATE = [440, 470];                                            // maintenance gate in the north fence
+const COUNTERS = [[130, 234]], COUNTER_D = m(0.8);                  // deposit point 1 on the west wall, north of the door (door at y 238–262)
 const LOCK = { x0: 289, x1: 470, d: m(0.5) };                       // deposit point 2 along the south wall
-const DESKS = [307, 426, 533];                                      // store work desks along the north wall
+const DESKS = [307, 426, 533];                                      // store work desks along the north wall, short end against it
+const WALL_DESKS = [245];                                           // store work desk with its long side on the north wall, facing it
 
 // rectangles in plan units for the 2D plan: [x, y, w, h, kind, name]
 export function warehousePlan() {
@@ -31,6 +33,7 @@ export function warehousePlan() {
   COUNTERS.forEach(([a, b]) => out.push([WALL.w + 1.3, a, COUNTER_D, b - a, 'deposit', 'Bin deposit point 1']));
   out.push([LOCK.x0, WALL.s - 1.3 - LOCK.d, LOCK.x1 - LOCK.x0, LOCK.d, 'deposit', 'Bin deposit point 2 (collection lockers)']);
   DESKS.forEach((x, i) => out.push([x - m(0.375), WALL.n + 1.3, m(0.75), m(1.6), 'desk', `Store work desk ${i + 1}`]));
+  WALL_DESKS.forEach((x, i) => out.push([x - m(0.8), WALL.n + 1.3, m(1.6), m(0.75), 'desk', `Store work desk ${DESKS.length + i + 1}`]));
   return out;
 }
 
@@ -47,7 +50,7 @@ export function buildWarehouse(THREE, { parent, mx, mz, U, M, add, pickables, mo
   const railMat = new THREE.MeshStandardMaterial({ color: 0x5d6b7a, roughness: 0.5, metalness: 0.5 });
 
   // ---------- racking (grey, double-deep, one rack on each side of the aisle) ----------
-  const RACK_H = 2.4, LEVELS = [0.12, 0.54, 0.96, 1.38, 1.8], BAYS = 7;
+  const RACK_H = 2.4, LEVELS = [0.12, 0.54, 0.96, 1.38, 1.8], BAYS = 12;
   const x0 = mx(RX[0]), x1 = mx(RX[1]), bayLen = (x1 - x0) / BAYS, depth = len(RD);
   const upMat = new THREE.MeshStandardMaterial({ color: 0x4a5866, roughness: 0.5, metalness: 0.45 });
   const beamMat = new THREE.MeshStandardMaterial({ color: 0x9aa5b1, roughness: 0.45, metalness: 0.4 });
@@ -157,7 +160,7 @@ export function buildWarehouse(THREE, { parent, mx, mz, U, M, add, pickables, mo
   const carried = pp(binGeo, new THREE.MeshStandardMaterial({ color: palette[0], roughness: 0.65 }), 0, 0.06 + BIN.h / 2, 0, fork); carried.visible = false;
   parts.forEach((p) => hover(p, 'Mini-load stacker crane', 'Automatic · stores and retrieves bins in the aisle'));
 
-  // ---------- deposit point 1: counters along the west wall, either side of the double door ----------
+  // ---------- deposit point 1: counter on the west wall, north of the double door, across from the stands ----------
   COUNTERS.forEach(([a, b]) => {
     const d = len(COUNTER_D), x = mx(WALL.w) + 0.045 + d / 2, z0 = mz(a), z1 = mz(b), w = z1 - z0, cz = (z0 + z1) / 2, sub = 'Work desk for now · final design to follow';
     hover(box(d, 0.05, w, M.benchTop, x, 0.9, cz), 'Bin deposit point 1', sub);
@@ -207,6 +210,15 @@ export function buildWarehouse(THREE, { parent, mx, mz, U, M, add, pickables, mo
     box(0.01, 0.29, 0.5, M.screen, x + W / 2 - 0.175, 1.0, z);
     box(0.5, 0.45, 0.5, M.chair, x - W / 2 - 0.35, 0.25, z);
     box(0.08, 0.5, 0.5, M.chair, x - W / 2 - 0.6, 0.7, z);
+  });
+  WALL_DESKS.forEach((px, i) => {   // long side on the north wall; the person sits facing the wall
+    const W = 1.6, D = 0.75, x = mx(px), z = mz(WALL.n) + 0.045 + D / 2, name = `Store work desk ${DESKS.length + i + 1}`;
+    hover(box(W, 0.05, D, M.table, x, 0.75, z), name, 'Store room staff · faces the wall');
+    [-1, 1].forEach((s) => box(0.05, 0.72, D * 0.9, M.steel, x + s * (W / 2 - 0.06), 0.36, z));
+    box(0.55, 0.34, 0.04, M.dark, x, 1.0, z - D / 2 + 0.15);
+    box(0.5, 0.29, 0.01, M.screen, x, 1.0, z - D / 2 + 0.175);
+    box(0.5, 0.45, 0.5, M.chair, x, 0.25, z + D / 2 + 0.35);
+    box(0.5, 0.5, 0.08, M.chair, x, 0.7, z + D / 2 + 0.6);
   });
 
   // ---------- optional illustrative movement (?whmotion=1): drop-off stand → rack, rack → pick-up stand ----------

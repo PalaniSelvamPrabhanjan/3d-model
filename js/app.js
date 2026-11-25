@@ -61,7 +61,7 @@ onLoss(renderer, (why) => {
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x061021); scene.fog = new THREE.Fog(0x061021, 70, 150);
 const cam = new THREE.PerspectiveCamera(40, 1, 0.5, 400);   // near plane 0.5 m: 5x finer depth precision than 0.1, so touching surfaces don't fight
 const ctl = new OrbitControls(cam, renderer.domElement);
-ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI * 0.495; ctl.minDistance = 3; ctl.maxDistance = 120; ctl.autoRotateSpeed = 0.6;
+ctl.enableDamping = true; ctl.maxPolarAngle = Math.PI * 0.495; ctl.minDistance = 3; ctl.maxDistance = 120; ctl.autoRotateSpeed = 0.3;   // tour orbit: one turn about every 200 s
 scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x0a1830, 0.9));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(-18, 34, 22); sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.03;   // no striped shadow acne
@@ -233,12 +233,13 @@ function makeAsset(a) {
       if (o.pick !== false) rec.meshes.push(mesh); return mesh;
     };
     const r = build(kind, a, swap ? d : w, swap ? w : d, heightFor(a), put); h = r.h;
+    const ms = typeof a.scale === 'number' ? Math.min(1.5, Math.max(0.3, a.scale)) : MS;   // a layout item can set its own "scale" (1 = full footprint)
     if (!FURNITURE.test(kind)) {   // shrink machines (config.machineScale): SMT line machines only across the line so conveyors still meet them
-      if (a.line) { m.scale.set(1, MS, MS); rw *= MS; } else { m.scale.setScalar(MS); rw *= MS; rd *= MS; }
-      h *= MS;
+      if (a.line) { m.scale.set(1, ms, ms); rw *= ms; } else { m.scale.setScalar(ms); rw *= ms; rd *= ms; }
+      h *= ms;
     }
     if (!a.line) {   // wall-side items sit flush against the wall (the shrink is taken from the aisle side, not the wall side)
-      const gap = wallGap(a, turn), D = swap ? w : d, sc = FURNITURE.test(kind) ? 1 : MS;
+      const gap = wallGap(a, turn), D = swap ? w : d, sc = FURNITURE.test(kind) ? 1 : ms;
       if (gap !== null && gap * U < SNAP) {
         const sh = gap * U - 0.045 + (1 - sc) * D / 2, t = turn * Math.PI / 180;   // 0.045 m = half the wall thickness + 5 mm
         ox = -Math.sin(t) * sh; oz = -Math.cos(t) * sh; m.position.x += ox; m.position.z += oz;
@@ -359,7 +360,7 @@ let stopFeed = () => {};
 const statusEl = document.getElementById('status'), statusText = document.getElementById('statusText');
 function setStatus(kind, text) {
   statusEl.className = 'pill pill-' + kind;
-  statusText.textContent = { none: 'No live data', live: 'Live', demo: 'Demo data', connecting: 'Connecting', reconnecting: 'Reconnecting', error: 'Feed error' }[kind] || kind;
+  statusText.textContent = { none: 'No live data', live: 'Live', demo: 'Active', connecting: 'Connecting', reconnecting: 'Reconnecting', error: 'Feed error' }[kind] || kind;
   statusEl.title = text || '';
 }
 function startFeed(demo) {
@@ -379,7 +380,8 @@ linesEl.innerHTML = lines.map((L) => `<button type="button" data-line="${L.n}" t
 function renderLines() {
   linesEl.querySelectorAll('button').forEach((b, k) => {
     const st = lines[k].ids.map((id) => effState(assets.get(id)));
-    const s2 = st.every((x) => x === 'NONE') ? 'NONE' : st.reduce((a, c) => (RANK[c] > RANK[a] ? c : a), 'RUN');
+    const on = st.filter((x) => x !== 'NONE' && x !== 'OFF');   // a line runs only if its machines do; all off → Off, no readings → No data
+    const s2 = on.length ? on.reduce((a, c) => (RANK[c] > RANK[a] ? c : a), 'RUN') : st.some((x) => x === 'OFF') ? 'OFF' : 'NONE';
     b.querySelector('i').style.background = STATES[s2].css; b.querySelector('span').textContent = STATES[s2].label;
   });
 }
@@ -387,7 +389,9 @@ linesEl.addEventListener('click', (e) => { const b = e.target.closest('button[da
 function renderSummary() {
   renderLines();
   const counts = { RUN: 0, IDLE: 0, DOWN: 0, MAINT: 0, NONE: 0 };
-  assets.forEach((r) => { if (!r.stateful) return; const s = effState(r); counts[s === 'OFF' ? 'NONE' : s]++; });
+  let off = 0, none = 0;
+  assets.forEach((r) => { if (!r.stateful) return; const s = effState(r); if (s === 'OFF') off++; else if (s === 'NONE') none++; counts[s === 'OFF' ? 'NONE' : s]++; });
+  const last = summaryEl.querySelector('[data-f="NONE"] span'); if (last) last.textContent = off && none ? 'Off / no data' : off ? 'Off' : 'No data';   // last tile counts powered-off and silent machines
   summaryEl.querySelectorAll('button').forEach((b) => { b.querySelector('b').textContent = counts[b.dataset.f]; b.setAttribute('aria-pressed', String(stateFilter === b.dataset.f)); });
 }
 let stateFilter = null;

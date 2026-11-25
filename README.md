@@ -46,20 +46,20 @@ A browser-based 3D digital twin of the Grid production and store rooms (Level 1)
 
 **Scale:** 1 plan unit = 35 mm. All 3D sizes are in metres.
 
-**Current model:** 34 room pieces, 23 doors, 111 assets.
+**Current model:** 34 room pieces, 23 doors, 121 assets.
 
 | Room | Assets |
 |---|---|
-| Clean Room (SMT) | 37 |
-| Hybrid Room | 23 |
+| Clean Room (SMT) | 38 |
+| Hybrid Room | 27 |
 | Laser Room | 19 |
 | HASS | 14 |
+| Selective Wave Soldering | 6 |
 | Test Lab | 5 |
 | IQC | 5 |
 | Changing Room | 3 |
 | SMT Holding Area | 2 |
 | Conformal Coating / Degreaser | 2 |
-| Selective Wave Soldering | 1 |
 
 ---
 
@@ -119,7 +119,7 @@ A mid-range office PC with integrated graphics is enough. The scene is about 840
 ## Using the twin
 
 ### Top bar
-- **Status pill:** shows **No live data**, **Connecting**, **Live**, **Reconnecting** or **Demo data** (while **View → Demo data** is on).
+- **Status pill:** shows **No live data**, **Connecting**, **Live**, **Reconnecting** or **Active** (while **View → Demo data** is on; hovering the pill says it is demo data).
 - **Clock**
 - **VIEW** dropdown:
   - Camera: **3D overview**, **Top view**, **SMT lines**, **Hybrid Room**, **Smart Warehouse**
@@ -247,7 +247,7 @@ The usual set-ups are:
 Keep the gateway on the plant network. The browser only ever reads.
 
 ### Demo data
-**View → Demo data** fills the model with made-up machine states, so the twin can be shown before a live feed is connected. The status pill says **Demo data** while it's on. Each browser remembers the choice; `"demoMode"` in `data/config.json` sets what a first-time visitor sees (currently on), and `?demo=1` or `?demo=0` in the address overrides both. Benches, cabinets, racks and conveyors never get a state.
+**View → Demo data** shows a fixed demo scene, so the twin can be shown before a live feed is connected: the machines listed in `"demoRunning"` in `data/config.json` are **Running** and every other machine is **Powered off**. The list is currently all of SMT line 2 (`"L2-*"`), the Palomar 3500-II die bonder, Palomar 9000 wire bonder, MVP 900 AOI and N2 baking oven 1 in the Hybrid Room, plus the Xslicer X-ray 1, MyTower, HALT/HASS chamber 1 and the laser engraver. Edit the list to change the scene (an entry ending in `*` matches every id that starts with it). The status pill says **Active** while it's on; hovering it shows that the states are demo data. Each browser remembers the choice; `"demoMode"` in `data/config.json` sets what a first-time visitor sees (currently on), and `?demo=1` or `?demo=0` in the address overrides both. Benches, cabinets, racks and conveyors never get a state.
 
 **View → Hide panels** removes the controls and the equipment list, leaving the title, clock and the 3D floor, for a wall screen. Bring them back with the **PANELS** button at the top right or the **H** key. `?panels=0` opens the page with the panels hidden, for example `?panels=0&demo=1` for a casting screen.
 
@@ -258,7 +258,7 @@ Keep the gateway on the plant network. The browser only ever reads.
 IDs are stable. They're used in the list, the detail card, the URL (`#ID`) and the live feed, so map them to your MES and PLC tag names in the gateway.
 
 ### SMT lines
-Line numbers follow the equipment list: Line 1 is the east column and Line 3 the west. Boards flow south → north: printer → SPI → mounters → oven.
+Line 1 is the west column and Line 3 the east (swapped from the first layout on request). Boards flow south → north: printer → SPI → mounters → oven.
 
 | Line | Machines |
 |---|---|
@@ -274,7 +274,7 @@ Pattern: `<ROOM>-<TYPE>-<nn>`
 | Prefix | Room | Examples |
 |---|---|---|
 | `SMT-` | Clean room, off-line | `SMT-AOI-01` Mirtec AOI, `SMT-XRY-01/02` Shimadzu X-ray, `SMT-N2C-nn` N2 cabinets |
-| `HYB-` | Hybrid Room | `HYB-DB-01/02` Palomar die bonders, `HYB-WBP-01` Palomar 9000, `HYB-WBH-01` Hesse BJ855, `HYB-PLS-01` plasma, `HYB-LBA-01` laser ball attach, `HYB-WB-nn` benches |
+| `HYB-` | Hybrid Room | `HYB-DB-01/02` Palomar die bonders, `HYB-WBP-01` Palomar 9000, `HYB-WBH-01` Hesse BJ855, `HYB-PLS-01` plasma, `HYB-LBA-01` laser ball attach, `HYB-AOI-01` MVP 900 AOI, `HYB-N2B-01/02` N2 baking ovens, `HYB-WBW-01` West Bond wedge bonder, `HYB-WB-nn` benches |
 | `LASER-` | Laser Room | `LASER-GBX-01` glovebox, `LASER-ENG-01` engraver, `LASER-FLT-01/02` INFICON leak testers, `LASER-GPC-nn` pressure chambers, `LASER-BMB-nn` bombing chambers, `LASER-BBT-nn` bubble testers |
 | `TLAB-` | Test Lab | tables, N2 cabinets |
 | `HOLD-` | SMT Holding Area | `HOLD-MYT-01` MYTower, `HOLD-FP-01` flying probe |
@@ -351,6 +351,7 @@ One polygon per grouped room: `{ "points": [[x,y], …], "restricted": true }`.
 | `model`, `power`, `utilities`, `owner` | no | Shown in the detail card |
 | `rot` | no | Extra rotation in degrees, written by Edit Layout |
 | `face` | no | Fixed facing in degrees: 0 = front to the south, 90 = east, -90 = west, 180 = north |
+| `scale` | no | Size of this machine relative to its footprint (1 = full size), instead of the overall `machineScale`. The die bonders use 1 |
 | `copyOf` | no | Set on pasted copies |
 
 **Types without a live state:** Work Bench, Bench, Table, Rack, Metal Rack, Metal Cabinet, Cabinet, N2 Cabinet, Dry Cabinet, ESD Shelves, IQC Workstations, Conveyor, Controller, Chiller.
@@ -404,13 +405,13 @@ The warehouse is an unmanned automated bin store (a mini-load system) with one s
 
 | Item | Where | Notes |
 |---|---|---|
-| Bin racking | Inside the fence | Grey, braced upright frames. Two double-deep racks, one each side of the aisle; 7 bays, 5 levels, 2.4 m high, 280 places for 600 × 400 × 300 mm bins |
+| Bin racking | Inside the fence, running west almost to bin deposit point 1 | Grey, braced upright frames. Two double-deep racks, one each side of the aisle; 12 bays, 5 levels, 2.4 m high, 480 places for 600 × 400 × 300 mm bins |
 | Stacker crane (1) | In the aisle | Mini-load crane on a floor rail with a top guide rail; telescopic forks reach both bin depths on either side |
-| Drop-off and pick-up stands | West end of the aisle, in the fence | Staff put bins on the north stand for the crane to store; the crane puts requested bins on the south stand |
-| Bin deposit point 1 | West wall, either side of the double door | Counters; a work desk for now, final design to follow |
+| Drop-off and pick-up stands | West end of the aisle, in the fence, across from deposit point 1 | Staff put bins on the north stand for the crane to store; the crane puts requested bins on the south stand |
+| Bin deposit point 1 | West wall, north of the double door | Counter facing the stands; a work desk for now, final design to follow |
 | Bin deposit point 2 | South wall | Collection-point locker bank with a kiosk, doors facing into the room |
-| Safety fence | Around the racking | 1.5 m wire mesh, yellow posts, yellow floor tape inside, locked maintenance gate in the north fence |
-| Store work desks (3) | North wall | Short end against the wall, worked from the west side |
+| Safety fence | Around the racking, from the stands to the east wall | 1.5 m wire mesh, yellow posts, yellow floor tape inside, 1 m clear between the racks and the fence for the crane and maintenance, locked maintenance gate in the north fence |
+| Store work desks (4) | North wall | Three with the short end against the wall, worked from the west side; one with its long side on the wall, facing it |
 
 The warehouse shows no demo data: the crane stands parked at the stands and Demo data does not affect it. For a presentation, `?whmotion=1` plays an illustrative movement (not live data): drop-off stand → rack, then rack → pick-up stand.
 
